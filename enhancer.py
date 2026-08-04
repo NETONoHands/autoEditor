@@ -34,22 +34,23 @@ def ensure_output_directory(project_root: str) -> str:
 
 
 def enhance_video_with_ffmpeg(
-    cortes_brutos_path: str,
+    cut_video_path: str,
     output_path: Optional[str] = None,
     lut_path: str = "lut.cube",
 ) -> str:
     configure_logging()
 
-    resolved_input_path = validate_input_file(cortes_brutos_path, "Input video")
+    resolved_input_path = validate_input_file(cut_video_path, "Input video")
     project_root = os.path.abspath(os.getcwd())
     output_directory = ensure_output_directory(project_root)
 
     resolved_output_path = os.path.abspath(
-        output_path or os.path.join(output_directory, "tratado.mp4")
+        output_path or os.path.join(output_directory, "base_tratada.mp4")
     )
     os.makedirs(os.path.dirname(resolved_output_path) or output_directory, exist_ok=True)
 
-    audio_filter = "afftdn,loudnorm=I=-14:LRA=11:TP=-1.5"
+    audio_filter = "loudnorm=I=-14:LRA=11:TP=-1.5,afftdn"
+    # Placeholder for LUT-based color grading.
     video_filter = f"lut3d=file='{lut_path}'"
 
     command = [
@@ -90,13 +91,13 @@ def enhance_video_with_ffmpeg(
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Apply audio and video enhancement filters to cortes_brutos.mp4.",
+        description="Apply audio and video enhancement filters to a cut video.",
     )
-    parser.add_argument("input", help="Path to cortes_brutos.mp4")
+    parser.add_argument("input", help="Path to the cut video file")
     parser.add_argument(
         "--output",
         default=None,
-        help="Optional output path. Defaults to Output/tratado.mp4.",
+        help="Optional output path. Defaults to Output/base_tratada.mp4.",
     )
     parser.add_argument(
         "--lut-path",

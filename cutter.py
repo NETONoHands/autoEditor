@@ -61,7 +61,11 @@ def extract_speech_intervals(transcription_data: Dict[str, Any], silence_thresho
                 current_end = float(end)
                 continue
 
-            if float(start) - float(current_end) <= silence_threshold:
+            if current_end is None:
+                current_end = float(end)
+                continue
+
+            if float(start) - current_end <= silence_threshold:
                 current_end = max(float(current_end), float(end))
             else:
                 segments.append({"start": current_start, "end": current_end})
@@ -93,15 +97,19 @@ def extract_speech_intervals(transcription_data: Dict[str, Any], silence_thresho
             current_end = end
             continue
 
-        if start - float(current_end) <= silence_threshold:
-            current_end = max(float(current_end), end)
+        if current_end is None:
+            current_end = end
+            continue
+
+        if start - current_end <= silence_threshold:
+            current_end = max(current_end, end)
         else:
-            intervals.append((current_start, float(current_end)))
+            intervals.append((current_start, current_end))
             current_start = start
             current_end = end
 
     if current_start is not None and current_end is not None:
-        intervals.append((current_start, float(current_end)))
+        intervals.append((current_start, current_end))
 
     return intervals
 

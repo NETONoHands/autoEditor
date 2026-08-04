@@ -3,11 +3,9 @@ import logging
 import os
 from typing import Any, Dict, Optional
 
-from cutter import cut_from_whisper_json
+from analyzer import classify_video_duration
 from enhancer import enhance_video_with_ffmpeg
-from setup_manager import setup_manager
-from subtitles import apply_subtitles_with_ffmpeg
-from transcriber import transcribe_video_to_json
+from formatter import format_video_by_classification
 
 
 LOGGER = logging.getLogger(__name__)
@@ -27,72 +25,52 @@ def run_pipeline(
     raw_video_path: str,
     subtitle_path: str,
     project_root: Optional[str] = None,
-    silence_threshold: float = 0.5,
     lut_path: str = "lut.cube",
-    final_output_path: Optional[str] = None,
+    output_directory: Optional[str] = None,
 ) -> Dict[str, Any]:
     configure_logging()
 
-    setup_result = setup_manager(raw_video_path, subtitle_path, project_root=project_root)
-    resolved_project_root = setup_result["project_root"]
-    backup_video_path = setup_result["video_backup_path"]
-    backup_subtitle_path = setup_result["subtitle_backup_path"]
-
-    LOGGER.info("Step 1/5 completed: setup_manager")
-
-    transcription_result = transcribe_video_to_json(
-        backup_video_path,
-        backup_subtitle_path,
-        project_root=resolved_project_root,
-        model_name="base",
+    resolved_project_root = os.path.abspath(project_root or os.getcwd())
+    resolved_output_directory = os.path.abspath(
+        output_directory or os.path.join(resolved_project_root, "Output")
     )
-    whisper_json_path = transcription_result["output_json_path"]
+    os.makedirs(resolved_output_directory, exist_ok=True)
 
-    LOGGER.info("Step 2/5 completed: transcriber")
+    classification = classify_video_duration(raw_video_path)
+    LOGGER.info("Step 1/3 completed: analyzer (%s)", classification)
 
-    cuts_output_path = os.path.join(resolved_project_root, "Output", "cortes_brutos.mp4")
-    cutting_result = cut_from_whisper_json(
-        whisper_json_path,
-        backup_video_path,
-        output_path=cuts_output_path,
-        silence_threshold=silence_threshold,
-    )
-
-    LOGGER.info("Step 3/5 completed: cutter")
-
-    treated_output_path = os.path.join(resolved_project_root, "Output", "tratado.mp4")
+    base_treated_path = os.path.join(resolved_output_directory, "base_tratada.mp4")
     treated_video_path = enhance_video_with_ffmpeg(
-        cutting_result["output_path"],
-        output_path=treated_output_path,
+        raw_video_path,
+        output_path=base_treated_path,
         lut_path=lut_path,
     )
+    LOGGER.info("Step 2/3 completed: enhancer")
 
-    LOGGER.info("Step 4/5 completed: enhancer")
-
-    default_final_output = os.path.join(resolved_project_root, "Output", "final_legendado.mp4")
-    subtitled_video_path = apply_subtitles_with_ffmpeg(
+    formatting_result = format_video_by_classification(
         treated_video_path,
-        backup_subtitle_path,
-        output_path=final_output_path or default_final_output,
+        subtitle_path,
+        classification,
+        output_directory=resolved_output_directory,
     )
+    LOGGER.info("Step 3/3 completed: formatter")
 
-    LOGGER.info("Step 5/5 completed: subtitles")
+    LOGGER.info(
+        "FFmpeg exports remain NVENC 10M in enhancer and formatter encoded outputs"
+    )
 
     return {
         "project_root": resolved_project_root,
-        "video_backup_path": backup_video_path,
-        "subtitle_backup_path": backup_subtitle_path,
-        "whisper_json_path": whisper_json_path,
-        "speech_intervals": cutting_result["intervals"],
-        "cortes_brutos_path": cutting_result["output_path"],
-        "tratado_path": treated_video_path,
-        "final_video_path": subtitled_video_path,
+        "output_directory": resolved_output_directory,
+        "classification": classification,
+        "base_treated_path": treated_video_path,
+        "formatted_outputs": formatting_result,
     }
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run the full autoEditor pipeline: setup, transcribe, cut, enhance and subtitle.",
+        description="Run analyzer, enhancer and formatter in sequence.",
     )
     parser.add_argument("video", help="Path to the raw input video")
     parser.add_argument("srt", help="Path to the respective SRT subtitle file")
@@ -102,20 +80,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="Project root folder. Defaults to current working directory.",
     )
     parser.add_argument(
-        "--silence-threshold",
-        type=float,
-        default=0.5,
-        help="Maximum silence gap in seconds allowed inside a speech block.",
-    )
-    parser.add_argument(
         "--lut-path",
         default="lut.cube",
         help="Placeholder LUT file path used during enhancement.",
     )
     parser.add_argument(
-        "--final-output",
+        "--output-dir",
         default=None,
-        help="Optional final output path. Defaults to Output/final_legendado.mp4.",
+        help="Optional output directory. Defaults to <project-root>/Output.",
     )
     return parser
 
@@ -131,9 +103,8 @@ def main() -> int:
             args.video,
             args.srt,
             project_root=args.project_root,
-            silence_threshold=args.silence_threshold,
             lut_path=args.lut_path,
-            final_output_path=args.final_output,
+            output_directory=args.output_dir,
         )
     except Exception as exc:
         LOGGER.exception("Pipeline failed: %s", exc)
