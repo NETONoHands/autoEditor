@@ -6,6 +6,35 @@ import subprocess
 from typing import Dict, Optional
 
 
+def _run_ffmpeg_with_fallback(command: list[str]) -> None:
+    try:
+        completed = subprocess.run(command, check=True, capture_output=True, text=True)
+        if completed.stdout:
+            LOGGER.info("FFmpeg stdout: %s", completed.stdout.strip())
+        if completed.stderr:
+            LOGGER.info("FFmpeg stderr: %s", completed.stderr.strip())
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        LOGGER.error("FFmpeg failed with stderr: %s", stderr)
+        if "h264_nvenc" in stderr or "nvenc" in stderr.lower() or "Function not implemented" in stderr:
+            LOGGER.warning("NVENC failed; retrying with libx264 CPU")
+            fallback_command = command.copy()
+            fallback_command[fallback_command.index("h264_nvenc")] = "libx264"
+            fallback_command[fallback_command.index("-rc") + 1] = "crf"
+            fallback_command[fallback_command.index("-b:v") + 1] = "23"
+            fallback_command[fallback_command.index("-minrate") + 1] = "0"
+            fallback_command[fallback_command.index("-maxrate") + 1] = "0"
+            fallback_command[fallback_command.index("-bufsize") + 1] = "0"
+            completed = subprocess.run(fallback_command, check=True, capture_output=True, text=True)
+            if completed.stdout:
+                LOGGER.info("FFmpeg fallback stdout: %s", completed.stdout.strip())
+            if completed.stderr:
+                LOGGER.info("FFmpeg fallback stderr: %s", completed.stderr.strip())
+            return
+
+        raise
+
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -42,11 +71,11 @@ def escape_path_for_ffmpeg_filter(path: str) -> str:
 
 
 def build_center_crop_9x16_filter() -> str:
-    crop_width = "if(gte(iw/ih,9/16),ih*9/16,iw)"
-    crop_height = "if(gte(iw/ih,9/16),ih,iw*16/9)"
-    crop_x = f"(iw-({crop_width}))/2"
-    crop_y = f"(ih-({crop_height}))/2"
-    return f"crop={crop_width}:{crop_height}:{crop_x}:{crop_y}"
+    # Corta a largura baseada na altura (ih * 9/16)
+    # Mantém a altura original (ih)
+    # Centraliza o eixo X pegando a largura original menos a nova dividido por 2 ((iw-ow)/2)
+    # Eixo Y fica no topo (0)
+    return "crop=ih*9/16:ih:(iw-ow)/2:0"
 
 
 def run_ffmpeg(command: list[str]) -> None:
@@ -106,7 +135,7 @@ def format_video_by_classification(
             "aac",
             final_vertical_legendado,
         ]
-        run_ffmpeg(short_command)
+        _run_ffmpeg_with_fallback(short_command)
 
         return {
             "classification": normalized_classification,
@@ -150,7 +179,7 @@ def format_video_by_classification(
         "aac",
         final_vertical,
     ]
-    run_ffmpeg(long_vertical_command)
+    _run_ffmpeg_with_fallback(long_vertical_command)
 
     copied_srt_path = os.path.join(
         resolved_output_directory,

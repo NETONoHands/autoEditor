@@ -4,6 +4,94 @@ import os
 import subprocess
 from typing import Optional
 
+def escape_path_for_ffmpeg_filter(path: str) -> str:
+    escaped = path.replace("\\", "/")
+    escaped = escaped.replace(":", "\\:")
+    escaped = escaped.replace("'", "\\'")
+    return escaped
+
+def _build_ffmpeg_command(
+        
+    input_path: str,
+    output_path: str,
+    video_filter: str,
+    lut_path: Optional[str] = None,
+) -> list[str]:
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        input_path,
+        "-af",
+        "afftdn,loudnorm=I=-14:LRA=11:TP=-1.5",
+    ]
+
+    if lut_path and os.path.isfile(lut_path):
+        caminho_escapado = escape_path_for_ffmpeg_filter(lut_path)
+        command.extend(["-vf", f"lut3d=file='{caminho_escapado}'"])
+    else:
+        LOGGER.info("LUT not found or invalid; continuing without LUT")
+
+    command.extend(
+        [
+            "-c:v",
+            "h264_nvenc",
+            "-rc",
+            "cbr",
+            "-b:v",
+            "10M",
+            "-minrate",
+            "10M",
+            "-maxrate",
+            "10M",
+            "-bufsize",
+            "20M",
+            "-c:a",
+            "aac",
+            output_path,
+        ]
+    )
+    return command
+
+
+def _run_ffmpeg_with_fallback(command: list[str]) -> None:
+    try:
+        completed = subprocess.run(command, check=True, capture_output=True, text=True)
+        if completed.stdout:
+            LOGGER.info("FFmpeg stdout: %s", completed.stdout.strip())
+        if completed.stderr:
+            LOGGER.info("FFmpeg stderr: %s", completed.stderr.strip())
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        LOGGER.error("FFmpeg failed with stderr: %s", stderr)
+        if "h264_nvenc" in stderr or "nvenc" in stderr.lower() or "Function not implemented" in stderr or "Nvidia driver" in stderr:
+            LOGGER.warning("NVENC failed; retrying with libx264 CPU")
+            
+            # Reconstrói o comando limpo para a CPU
+            input_file = command[command.index("-i") + 1]
+            output_file = command[-1]
+            
+            fallback_command = [
+                "ffmpeg", "-y", "-i", input_file,
+                "-af", command[command.index("-af") + 1]
+            ]
+            if "-vf" in command:
+                fallback_command.extend(["-vf", command[command.index("-vf") + 1]])
+            
+            fallback_command.extend([
+                "-c:v", "libx264", "-crf", "23", "-preset", "fast",
+                "-c:a", "aac", output_file
+            ])
+            
+            completed = subprocess.run(fallback_command, check=True, capture_output=True, text=True)
+            if completed.stdout:
+                LOGGER.info("FFmpeg fallback stdout: %s", completed.stdout.strip())
+            if completed.stderr:
+                LOGGER.info("FFmpeg fallback stderr: %s", completed.stderr.strip())
+            return
+
+        raise
+
 
 LOGGER = logging.getLogger(__name__)
 
@@ -49,38 +137,15 @@ def enhance_video_with_ffmpeg(
     )
     os.makedirs(os.path.dirname(resolved_output_path) or output_directory, exist_ok=True)
 
-    audio_filter = "loudnorm=I=-14:LRA=11:TP=-1.5,afftdn"
-    # Placeholder for LUT-based color grading.
-    video_filter = f"lut3d=file='{lut_path}'"
-
-    command = [
-        "ffmpeg",
-        "-y",
-        "-i",
+    command = _build_ffmpeg_command(
         resolved_input_path,
-        "-vf",
-        video_filter,
-        "-af",
-        audio_filter,
-        "-c:v",
-        "h264_nvenc",
-        "-rc",
-        "cbr",
-        "-b:v",
-        "10M",
-        "-minrate",
-        "10M",
-        "-maxrate",
-        "10M",
-        "-bufsize",
-        "20M",
-        "-c:a",
-        "aac",
         resolved_output_path,
-    ]
+        video_filter="",
+        lut_path=lut_path,
+    )
 
     LOGGER.info("Running FFmpeg command: %s", " ".join(command))
-    subprocess.run(command, check=True)
+    _run_ffmpeg_with_fallback(command)
 
     if not os.path.isfile(resolved_output_path):
         raise RuntimeError(f"Enhanced video was not created: {resolved_output_path}")

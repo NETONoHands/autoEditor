@@ -4,8 +4,8 @@ $pythonExe = "e:/Projetos/autoEditor/.venv/Scripts/python.exe"
 $projectRoot = "E:/Projetos/autoEditor"
 
 # Preencha estes caminhos antes de executar.
-$videoPath = "E:/Projetos/autoEditor/cortes/corte_1_o_que_e_acessibilidade_no_mundo_digital.mp4"
-$srtPath = "E:/Projetos/autoEditor/cortes/corte_1_o_que_e_acessibilidade_no_mundo_digital.srt"
+$videoPath = "E:/Projetos/autoEditor/cortes/corte_1_como_funciona_o_quadstick_para_pcd.mp4"
+$srtPath = "E:/Projetos/autoEditor/cortes/corte_1_como_funciona_o_quadstick_para_pcd.srt"
 $lutPath = "E:/Projetos/autoEditor/assets/color/Assets/Vivid LUTs 3.cube"
 
 if (-not (Test-Path $pythonExe)) {

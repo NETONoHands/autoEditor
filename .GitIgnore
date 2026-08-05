@@ -1,0 +1,53 @@
+# ==========================================
+# REGRAS ESPECÍFICAS DO SEU PROJETO
+# ==========================================
+output/
+cortes/
+
+# ==========================================
+# SEGURANÇA (Arquivos com credenciais e chaves)
+# ==========================================
+# Variáveis de ambiente (nunca envie senhas ou tokens para o Git)
+.env
+.env.local
+.env.*
+.secrets
+secrets.*
+
+# Chaves privadas e certificados
+*.pem
+*.key
+*.pub
+*.pfx
+*.crt
+
+# ==========================================
+# PYTHON (Arquivos temporários e Caches)
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+.cache/
+
+# Ambientes Virtuais (evita enviar pacotes instalados)
+.venv/
+venv/
+env/
+ENV/
+
+# ==========================================
+# BANCOS DE DADOS E ARQUIVOS DE LOG
+# ==========================================
+*.log
+*.sqlite
+*.sqlite3
+
+# ==========================================
+# CONFIGURAÇÕES DE EDITORES (Opcional)
+# ==========================================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
