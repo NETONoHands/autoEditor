@@ -5,6 +5,8 @@ import shutil
 import subprocess
 from typing import Dict, Optional
 
+from face_tracker import detect_face_crop_x
+
 
 def _run_ffmpeg_with_fallback(command: list[str]) -> None:
     try:
@@ -78,6 +80,54 @@ def build_center_crop_9x16_filter() -> str:
     return "crop=ih*9/16:ih:(iw-ow)/2:0"
 
 
+def build_vertical_crop_filter(crop_x: Optional[int] = None) -> str:
+    if crop_x is None:
+        return build_center_crop_9x16_filter()
+    return f"crop=ih*9/16:ih:{max(0, int(crop_x))}:0"
+
+
+def escape_drawtext_text(text: str) -> str:
+    return (
+        text.replace("\\", "\\\\")
+        .replace(":", "\\:")
+        .replace("'", "\\'")
+        .replace("%", "%%")
+    )
+
+
+def build_vertical_composite_filter(
+    subtitle_path: str,
+    title: str = "",
+    crop_x: Optional[int] = None,
+) -> str:
+    filters = [build_vertical_crop_filter(crop_x), "scale=1080:1920"]
+    if title.strip():
+        filters.append(
+            "drawtext="
+            f"text='{escape_drawtext_text(title.strip())}':"
+            "font='DejaVu Sans':fontsize=52:fontcolor=yellow:"
+            "borderw=3:bordercolor=black:x=(w-text_w)/2:y=80"
+        )
+    subtitle_filter = (
+        f"subtitles=filename='{escape_path_for_ffmpeg_filter(subtitle_path)}':"
+        "force_style='FontName=DejaVu Sans,FontSize=22,PrimaryColour=&H00FFFFFF,"
+        "OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,"
+        "Alignment=2,MarginV=120'"
+    )
+    filters.append(subtitle_filter)
+    return ",".join(filters)
+
+
+def resolve_vertical_crop_x(video_path: str, face_tracking: bool) -> Optional[int]:
+    if not face_tracking:
+        return None
+    try:
+        return detect_face_crop_x(video_path)
+    except Exception as exc:
+        LOGGER.warning("Face tracking failed; using center crop: %s", exc)
+        return None
+
+
 def run_ffmpeg(command: list[str]) -> None:
     LOGGER.info("Running FFmpeg command: %s", " ".join(command))
     subprocess.run(command, check=True)
@@ -88,6 +138,9 @@ def format_video_by_classification(
     subtitle_path: str,
     classification: str,
     output_directory: Optional[str] = None,
+    output_stem: str = "final",
+    title: str = "",
+    face_tracking: bool = True,
 ) -> Dict[str, str]:
     configure_logging()
 
@@ -102,21 +155,33 @@ def format_video_by_classification(
     )
     os.makedirs(resolved_output_directory, exist_ok=True)
 
-    crop_filter = build_center_crop_9x16_filter()
+    crop_x = resolve_vertical_crop_x(resolved_video_path, face_tracking)
+    vertical_filter = build_vertical_composite_filter(
+        resolved_subtitle_path,
+        title=title,
+        crop_x=crop_x,
+    )
 
     if normalized_classification == "short":
         final_vertical_legendado = os.path.join(
             resolved_output_directory,
-            "final_vertical_legendado.mp4",
+            f"{output_stem}-vertical-legendado.mp4",
         )
-        subtitle_filter = f"subtitles=filename='{escape_path_for_ffmpeg_filter(resolved_subtitle_path)}'"
-        video_filter = f"{crop_filter},{subtitle_filter}"
+        final_horizontal_legendado = os.path.join(
+            resolved_output_directory,
+            f"{output_stem}-horizontal-legendado.mp4",
+        )
+        video_filter = vertical_filter
 
         short_command = [
             "ffmpeg",
             "-y",
             "-i",
             resolved_video_path,
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a:0?",
             "-vf",
             video_filter,
             "-c:v",
@@ -137,21 +202,59 @@ def format_video_by_classification(
         ]
         _run_ffmpeg_with_fallback(short_command)
 
+        horizontal_command = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            resolved_video_path,
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a:0?",
+            "-vf",
+            f"scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
+            "-c:v",
+            "h264_nvenc",
+            "-rc",
+            "cbr",
+            "-b:v",
+            "10M",
+            "-minrate",
+            "10M",
+            "-maxrate",
+            "10M",
+            "-bufsize",
+            "20M",
+            "-c:a",
+            "aac",
+            final_horizontal_legendado,
+        ]
+        _run_ffmpeg_with_fallback(horizontal_command)
+
         return {
             "classification": normalized_classification,
             "final_vertical_legendado": final_vertical_legendado,
+            "final_horizontal_legendado": final_horizontal_legendado,
         }
 
-    final_horizontal = os.path.join(resolved_output_directory, "final_horizontal.mp4")
-    final_vertical = os.path.join(resolved_output_directory, "final_vertical.mp4")
+    final_horizontal = os.path.join(resolved_output_directory, f"{output_stem}-horizontal.mp4")
+    final_vertical = os.path.join(resolved_output_directory, f"{output_stem}-vertical.mp4")
 
     long_horizontal_command = [
         "ffmpeg",
         "-y",
         "-i",
         resolved_video_path,
-        "-c",
-        "copy",
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0?",
+        "-vf",
+        "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2",
+        "-c:v",
+        "libx264",
+        "-c:a",
+        "aac",
         final_horizontal,
     ]
     run_ffmpeg(long_horizontal_command)
@@ -161,8 +264,12 @@ def format_video_by_classification(
         "-y",
         "-i",
         resolved_video_path,
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0?",
         "-vf",
-        crop_filter,
+        vertical_filter,
         "-c:v",
         "h264_nvenc",
         "-rc",
@@ -183,7 +290,7 @@ def format_video_by_classification(
 
     copied_srt_path = os.path.join(
         resolved_output_directory,
-        os.path.basename(resolved_subtitle_path),
+        f"{output_stem}.srt",
     )
     shutil.copy2(resolved_subtitle_path, copied_srt_path)
     LOGGER.info("Copied subtitle to %s", copied_srt_path)
@@ -223,6 +330,7 @@ def main() -> int:
             args.srt,
             args.classification,
             output_directory=args.output_dir,
+            output_stem="final",
         )
     except Exception as exc:
         LOGGER.exception("Formatting failed: %s", exc)

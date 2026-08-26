@@ -39,7 +39,15 @@ def load_whisper_json(json_path: str) -> Dict[str, Any]:
         return json.load(json_file)
 
 
-def extract_speech_intervals(transcription_data: Dict[str, Any], silence_threshold: float = 0.5) -> List[SpeechInterval]:
+DEFAULT_SILENCE_THRESHOLD = 0.3
+
+
+def extract_speech_intervals(
+    transcription_data: Dict[str, Any],
+    silence_threshold: float = DEFAULT_SILENCE_THRESHOLD,
+) -> List[SpeechInterval]:
+    if silence_threshold < 0:
+        raise ValueError("Silence threshold cannot be negative.")
     segments = transcription_data.get("segments", [])
     if not segments:
         words = transcription_data.get("words", [])
@@ -65,7 +73,7 @@ def extract_speech_intervals(transcription_data: Dict[str, Any], silence_thresho
                 current_end = float(end)
                 continue
 
-            if float(start) - current_end <= silence_threshold:
+            if float(start) - current_end <= silence_threshold + 1e-9:
                 current_end = max(float(current_end), float(end))
             else:
                 segments.append({"start": current_start, "end": current_end})
@@ -101,7 +109,7 @@ def extract_speech_intervals(transcription_data: Dict[str, Any], silence_thresho
             current_end = end
             continue
 
-        if start - current_end <= silence_threshold:
+        if start - current_end <= silence_threshold + 1e-9:
             current_end = max(current_end, end)
         else:
             intervals.append((current_start, current_end))
@@ -112,6 +120,13 @@ def extract_speech_intervals(transcription_data: Dict[str, Any], silence_thresho
         intervals.append((current_start, current_end))
 
     return intervals
+
+
+def serialize_intervals(intervals: Sequence[SpeechInterval]) -> List[Dict[str, float]]:
+    return [
+        {"start": float(start), "end": float(end), "duration": float(end - start)}
+        for start, end in intervals
+    ]
 
 
 def write_concat_list_file(segment_paths: Sequence[str], work_dir: str) -> str:
@@ -187,7 +202,7 @@ def cut_video_with_ffmpeg(
         ]
         run_ffmpeg(concat_command)
 
-    if not os.path.isfile(resolved_output_path):
+    if not os.path.isfile(resolved_output_path) or os.path.getsize(resolved_output_path) == 0:
         raise RuntimeError(f"Cropped video was not created: {resolved_output_path}")
 
     LOGGER.info("Cropped video saved to %s", resolved_output_path)
@@ -198,7 +213,7 @@ def cut_from_whisper_json(
     json_path: str,
     video_path: str,
     output_path: Optional[str] = None,
-    silence_threshold: float = 0.5,
+    silence_threshold: float = DEFAULT_SILENCE_THRESHOLD,
 ) -> Dict[str, Any]:
     configure_logging()
 
@@ -208,6 +223,7 @@ def cut_from_whisper_json(
 
     return {
         "intervals": intervals,
+        "preserved_intervals": serialize_intervals(intervals),
         "output_path": resolved_output_path,
     }
 
@@ -226,7 +242,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--silence-threshold",
         type=float,
-        default=0.5,
+        default=DEFAULT_SILENCE_THRESHOLD,
         help="Maximum silence gap in seconds allowed inside a speech block.",
     )
     return parser

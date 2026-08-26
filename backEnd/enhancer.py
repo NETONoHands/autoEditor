@@ -11,7 +11,6 @@ def escape_path_for_ffmpeg_filter(path: str) -> str:
     return escaped
 
 def _build_ffmpeg_command(
-        
     input_path: str,
     output_path: str,
     video_filter: str,
@@ -26,14 +25,24 @@ def _build_ffmpeg_command(
         "afftdn,loudnorm=I=-14:LRA=11:TP=-1.5",
     ]
 
+    video_filters = []
+    if video_filter:
+        video_filters.append(video_filter)
     if lut_path and os.path.isfile(lut_path):
         caminho_escapado = escape_path_for_ffmpeg_filter(lut_path)
-        command.extend(["-vf", f"lut3d=file='{caminho_escapado}'"])
+        video_filters.append(f"lut3d=file='{caminho_escapado}'")
     else:
         LOGGER.info("LUT not found or invalid; continuing without LUT")
 
+    if video_filters:
+        command.extend(["-vf", ",".join(video_filters)])
+
     command.extend(
         [
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a:0?",
             "-c:v",
             "h264_nvenc",
             "-rc",
@@ -75,6 +84,7 @@ def _run_ffmpeg_with_fallback(command: list[str]) -> None:
                 "ffmpeg", "-y", "-i", input_file,
                 "-af", command[command.index("-af") + 1]
             ]
+            fallback_command.extend(["-map", "0:v:0", "-map", "0:a:0?"])
             if "-vf" in command:
                 fallback_command.extend(["-vf", command[command.index("-vf") + 1]])
             
