@@ -57,6 +57,7 @@ def run_pipeline(
     remove_silence: bool = False,
     silence_threshold: float = DEFAULT_SILENCE_THRESHOLD,
     face_tracking: bool = True,
+    display_title: str = "",
 ) -> Dict[str, Any]:
     configure_logging()
 
@@ -162,7 +163,7 @@ def run_pipeline(
                 classification,
                 output_directory=resolved_output_directory,
                 output_stem=part_stem,
-                title=output_name,
+                title=display_title,
                 face_tracking=face_tracking,
             )
             if remove_silence and not os.path.isfile(os.path.join(resolved_output_directory, f"{part_stem}.srt")):

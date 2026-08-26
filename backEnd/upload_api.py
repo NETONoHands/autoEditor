@@ -81,6 +81,7 @@ class EditRequest(BaseModel):
     remove_silence: bool = False
     silence_threshold: float = 0.3
     face_tracking: bool = True
+    display_title: str | None = None
 
 
 def _project_directory(project_id: str) -> Path:
@@ -169,6 +170,7 @@ def _run_edit(project_id: str, edit_id: str, request: EditRequest) -> None:
             remove_silence=request.remove_silence,
             silence_threshold=request.silence_threshold,
             face_tracking=request.face_tracking,
+            display_title=request.display_title or "",
         )
         files = [
             {"output_id": path.name, "filename": path.name, "size_bytes": path.stat().st_size}

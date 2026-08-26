@@ -9,8 +9,11 @@ def test_vertical_filter_uses_central_crop_and_reserved_title_subtitle_areas() -
     assert "crop=ih*9/16:ih:(iw-ow)/2:0" in result
     assert "scale=1080:1920" in result
     assert "drawtext" in result
+    assert "fontfile=" in result
     assert "fontcolor=yellow" in result
     assert "x=(w-text_w)/2:y=80" in result
+    assert "enable='between(t,0,5)'" in result
+    assert "alpha='if(lt(t,4),1,5-t)'" in result
     assert "MarginV=120" in result
     assert result.index("drawtext") < result.index("subtitles")
 
@@ -19,6 +22,12 @@ def test_vertical_filter_escapes_title_text() -> None:
     result = formatter.build_vertical_composite_filter("C:/legenda.srt", "Título: 100%")
 
     assert "T\u00edtulo\\: 100%%" in result
+
+
+def test_vertical_filter_can_omit_visual_title() -> None:
+    result = formatter.build_vertical_composite_filter("C:/legenda.srt", "")
+
+    assert "drawtext" not in result
 
 
 def test_vertical_crop_can_use_face_position() -> None:

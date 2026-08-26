@@ -95,6 +95,16 @@ def escape_drawtext_text(text: str) -> str:
     )
 
 
+def resolve_title_fontfile() -> Optional[str]:
+    configured = os.getenv("TAPA_NA_LATA_TITLE_FONT")
+    candidates = [
+        configured,
+        r"C:\Windows\Fonts\arialbd.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ]
+    return next((path for path in candidates if path and os.path.isfile(path)), None)
+
+
 def build_vertical_composite_filter(
     subtitle_path: str,
     title: str = "",
@@ -102,15 +112,22 @@ def build_vertical_composite_filter(
 ) -> str:
     filters = [build_vertical_crop_filter(crop_x), "scale=1080:1920"]
     if title.strip():
-        filters.append(
-            "drawtext="
-            f"text='{escape_drawtext_text(title.strip())}':"
-            "font='DejaVu Sans':fontsize=52:fontcolor=yellow:"
-            "borderw=3:bordercolor=black:x=(w-text_w)/2:y=80"
-        )
+        fontfile = resolve_title_fontfile()
+        if fontfile is None:
+            LOGGER.warning("Title font not found; skipping drawtext to avoid FFmpeg fontconfig failure")
+        else:
+            escaped_fontfile = escape_path_for_ffmpeg_filter(fontfile)
+            filters.append(
+                "drawtext="
+                f"fontfile='{escaped_fontfile}':"
+                f"text='{escape_drawtext_text(title.strip())}':"
+                "fontsize=52:fontcolor=yellow:"
+                "borderw=3:bordercolor=black:x=(w-text_w)/2:y=80:"
+                "enable='between(t,0,5)':alpha='if(lt(t,4),1,5-t)'"
+            )
     subtitle_filter = (
         f"subtitles=filename='{escape_path_for_ffmpeg_filter(subtitle_path)}':"
-        "force_style='FontName=DejaVu Sans,FontSize=22,PrimaryColour=&H00FFFFFF,"
+        "force_style='FontName=Arial,FontSize=12,PrimaryColour=&H00FFFFFF,"
         "OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,"
         "Alignment=2,MarginV=120'"
     )

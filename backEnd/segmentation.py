@@ -27,6 +27,32 @@ class SubtitleCue:
     end: float
 
 
+def normalize_subtitle_cues(
+    cues: Sequence[SubtitleCue],
+    words_per_line: int = 4,
+    lines_per_cue: int = 2,
+) -> list[SubtitleCue]:
+    if words_per_line <= 0 or lines_per_cue <= 0:
+        raise ValueError("Os limites de palavras e linhas devem ser positivos.")
+    max_words = words_per_line * lines_per_cue
+    normalized: list[SubtitleCue] = []
+    for cue in cues:
+        words = cue.text.split()
+        if not words:
+            continue
+        chunks = [words[index:index + max_words] for index in range(0, len(words), max_words)]
+        duration = cue.end - cue.start
+        for chunk_index, chunk in enumerate(chunks):
+            start = cue.start + duration * chunk_index / len(chunks)
+            end = cue.start + duration * (chunk_index + 1) / len(chunks)
+            lines = [
+                " ".join(chunk[index:index + words_per_line])
+                for index in range(0, len(chunk), words_per_line)
+            ]
+            normalized.append(SubtitleCue("\n".join(lines), start, end))
+    return normalized
+
+
 def _nearest_speech_end_before(
     target: float,
     window_start: float,
@@ -116,6 +142,15 @@ def _format_timestamp(value: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
 
 
+def normalize_srt_content(srt_content: str) -> str:
+    cues = normalize_subtitle_cues(parse_srt(srt_content))
+    blocks = [
+        "\n".join([str(index), f"{_format_timestamp(cue.start)} --> {_format_timestamp(cue.end)}", cue.text])
+        for index, cue in enumerate(cues, start=1)
+    ]
+    return "\n\n".join(blocks) + ("\n" if blocks else "")
+
+
 def rebase_srt(srt_content: str, window: TimeWindow) -> str:
     blocks = re.split(r"\r?\n\s*\r?\n", srt_content.strip())
     rebased_blocks: list[str] = []
@@ -172,7 +207,7 @@ def rebase_srt_to_intervals(
                     ]
                 )
             )
-    return "\n\n".join(output_blocks) + ("\n" if output_blocks else "")
+    return normalize_srt_content("\n\n".join(output_blocks) + ("\n" if output_blocks else ""))
 
 
 def extract_srt_intervals(srt_content: str) -> list[SpeechInterval]:

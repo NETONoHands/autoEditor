@@ -207,7 +207,7 @@ def validate_vertical_output(video_path: str) -> dict[str, object]:
         raise RuntimeError("A duração do vídeo vertical deve ser finita e maior que zero.")
     if (width, height) != (1080, 1920):
         raise RuntimeError(f"O vídeo vertical deve ter 1080x1920; encontrado {width}x{height}.")
-    if video_codec != "h264":
+    if video_codec not in {"h264", "avc1"}:
         raise RuntimeError(f"O vídeo vertical deve usar H.264; encontrado {video_codec}.")
     if audio_codec != "aac":
         raise RuntimeError(f"O áudio final deve usar AAC; encontrado {audio_codec}.")

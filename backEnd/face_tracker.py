@@ -81,7 +81,11 @@ def detect_face_crop_x(video_path: str) -> int:
 
         frame_count = capture.get(cv2.CAP_PROP_FRAME_COUNT)
         duration_seconds = frame_count / fps if frame_count > 0 else 5.0
-        sample_seconds = [sec for sec in range(5) if sec < duration_seconds]
+        sample_count = min(10, max(3, int(duration_seconds)))
+        sample_seconds = [
+            duration_seconds * index / max(1, sample_count - 1)
+            for index in range(sample_count)
+        ]
         if not sample_seconds:
             sample_seconds = [0]
 
@@ -95,6 +99,7 @@ def detect_face_crop_x(video_path: str) -> int:
                 continue
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray = cv2.equalizeHist(gray)
             faces = face_cascade.detectMultiScale(
                 gray,
                 scaleFactor=1.1,
