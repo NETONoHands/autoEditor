@@ -39,7 +39,7 @@ def load_whisper_json(json_path: str) -> Dict[str, Any]:
         return json.load(json_file)
 
 
-DEFAULT_SILENCE_THRESHOLD = 0.3
+DEFAULT_SILENCE_THRESHOLD = 0.1
 
 
 def extract_speech_intervals(
@@ -146,6 +146,27 @@ def run_ffmpeg(command: List[str]) -> None:
     subprocess.run(command, check=True)
 
 
+def run_segment_ffmpeg_with_fallback(command: List[str]) -> None:
+    try:
+        run_ffmpeg(command)
+    except subprocess.CalledProcessError:
+        codec_index = command.index("-c:v")
+        if command[codec_index + 1] != "h264_nvenc":
+            raise
+
+        LOGGER.warning("NVENC failed while cutting a segment; retrying with libx264 CPU")
+        fallback_command = command.copy()
+        fallback_command[codec_index:codec_index + 2] = [
+            "-c:v",
+            "libx264",
+            "-crf",
+            "23",
+            "-preset",
+            "fast",
+        ]
+        run_ffmpeg(fallback_command)
+
+
 def cut_video_with_ffmpeg(
     video_path: str,
     intervals: Sequence[SpeechInterval],
@@ -176,13 +197,31 @@ def cut_video_with_ffmpeg(
                 resolved_video_path,
                 "-ss",
                 str(start),
-                "-to",
-                str(end),
-                "-c",
-                "copy",
+                "-t",
+                str(end - start),
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:a:0?",
+                "-c:v",
+                "h264_nvenc",
+                "-preset",
+                "p4",
+                "-rc",
+                "vbr",
+                "-cq",
+                "23",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-movflags",
+                "+faststart",
                 segment_path,
             ]
-            run_ffmpeg(command)
+            run_segment_ffmpeg_with_fallback(command)
             segment_paths.append(segment_path)
 
         concat_list_path = write_concat_list_file(segment_paths, temp_dir)

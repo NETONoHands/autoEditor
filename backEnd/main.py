@@ -58,6 +58,7 @@ def run_pipeline(
     silence_threshold: float = DEFAULT_SILENCE_THRESHOLD,
     face_tracking: bool = True,
     display_title: str = "",
+    safe_area: float = 0.0,
 ) -> Dict[str, Any]:
     configure_logging()
 
@@ -109,10 +110,12 @@ def run_pipeline(
         for index, source_path in enumerate(source_paths, start=1):
             part_stem = build_output_stem(output_name, index) if is_split else output_stem
             part_srt_path = resolved_subtitle_path
+            part_srt_content = subtitle_content
             if is_split:
                 part_srt_path = os.path.join(work_directory, f"{part_stem}.srt")
+                part_srt_content = rebase_srt(subtitle_content, windows[index - 1])
                 with open(part_srt_path, "w", encoding="utf-8") as part_file:
-                    part_file.write(rebase_srt(subtitle_content, windows[index - 1]))
+                    part_file.write(part_srt_content)
 
             edit_source_path = source_path
             if remove_silence:
@@ -132,7 +135,7 @@ def run_pipeline(
                     f"{part_stem}.srt",
                 )
                 with open(final_srt_path, "w", encoding="utf-8") as final_srt_file:
-                    final_srt_file.write(rebase_srt_to_intervals(subtitle_content, intervals))
+                    final_srt_file.write(rebase_srt_to_intervals(part_srt_content, intervals))
                 validate_srt_file(final_srt_path)
                 published_srt_paths.append(os.path.basename(final_srt_path))
                 preserved_intervals.extend(
@@ -165,6 +168,7 @@ def run_pipeline(
                 output_stem=part_stem,
                 title=display_title,
                 face_tracking=face_tracking,
+                safe_area=safe_area,
             )
             if remove_silence and not os.path.isfile(os.path.join(resolved_output_directory, f"{part_stem}.srt")):
                 published_srt_path = os.path.join(resolved_output_directory, f"{part_stem}.srt")

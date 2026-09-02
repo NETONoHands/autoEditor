@@ -12,7 +12,7 @@ from typing import Annotated, Any
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from analyzer import analyze_video
 from main import DEFAULT_LUT_PATH, run_pipeline
@@ -79,9 +79,10 @@ class EditRequest(BaseModel):
     name: str | None = None
     lut_path: str | None = None
     remove_silence: bool = False
-    silence_threshold: float = 0.3
+    silence_threshold: float = Field(default=0.3, ge=0.0, le=2.0)
     face_tracking: bool = True
     display_title: str | None = None
+    safe_area: float = Field(default=0.0, ge=0.0, le=0.2)
 
 
 def _project_directory(project_id: str) -> Path:
@@ -171,6 +172,7 @@ def _run_edit(project_id: str, edit_id: str, request: EditRequest) -> None:
             silence_threshold=request.silence_threshold,
             face_tracking=request.face_tracking,
             display_title=request.display_title or "",
+            safe_area=request.safe_area,
         )
         files = [
             {"output_id": path.name, "filename": path.name, "size_bytes": path.stat().st_size}

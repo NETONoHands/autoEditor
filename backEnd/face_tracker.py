@@ -34,17 +34,35 @@ def _clamp_crop_x(crop_x: float, input_width: int, crop_width: int) -> int:
     return max(0, min(int(round(crop_x)), max_x))
 
 
-def _get_haar_cascade_path() -> str:
-    # Evita dependência direta em cv2.data para compatibilidade com tipagem estática.
-    data_attr = getattr(cv2, "data", None)
-    if data_attr is not None and hasattr(data_attr, "haarcascades"):
-        return str(Path(data_attr.haarcascades) / "haarcascade_frontalface_default.xml")
+DEFAULT_YUNET_MODEL_PATH = str(
+    Path(__file__).resolve().parent
+    / "assets"
+    / "models"
+    / "face_detection_yunet_2023mar.onnx"
+)
+YUNET_SCORE_THRESHOLD = 0.6
 
-    # Fallback: estrutura comum do pacote OpenCV.
-    return str(
-        Path(cv2.__file__).resolve().parent
-        / "data"
-        / "haarcascade_frontalface_default.xml"
+
+def _get_yunet_model_path() -> str:
+    # Permite apontar para um modelo alternativo sem alterar código.
+    configured = os.getenv("TAPA_NA_LATA_YUNET_MODEL")
+    model_path = configured if configured else DEFAULT_YUNET_MODEL_PATH
+    if not os.path.isfile(model_path):
+        raise RuntimeError(f"YuNet model file not found: {model_path}")
+    return model_path
+
+
+def _create_face_detector(input_width: int, input_height: int):
+    detector_ctor = getattr(cv2, "FaceDetectorYN", None)
+    if detector_ctor is None or not hasattr(detector_ctor, "create"):
+        raise RuntimeError("OpenCV FaceDetectorYN (YuNet) is unavailable in this environment")
+
+    model_path = _get_yunet_model_path()
+    return detector_ctor.create(
+        model_path,
+        "",
+        (input_width, input_height),
+        score_threshold=YUNET_SCORE_THRESHOLD,
     )
 
 
@@ -70,14 +88,7 @@ def detect_face_crop_x(video_path: str) -> int:
         crop_width = _compute_vertical_crop_width(input_width, input_height)
         center_fallback_x = _compute_center_crop_x(input_width, crop_width)
 
-        cascade_path = _get_haar_cascade_path()
-        classifier_ctor = getattr(cv2, "CascadeClassifier", None)
-        if classifier_ctor is None:
-            raise RuntimeError("OpenCV CascadeClassifier is unavailable in this environment")
-
-        face_cascade = classifier_ctor(cascade_path)
-        if face_cascade.empty():
-            raise RuntimeError(f"Unable to load Haar Cascade: {cascade_path}")
+        face_detector = _create_face_detector(input_width, input_height)
 
         frame_count = capture.get(cv2.CAP_PROP_FRAME_COUNT)
         duration_seconds = frame_count / fps if frame_count > 0 else 5.0
@@ -98,20 +109,12 @@ def detect_face_crop_x(video_path: str) -> int:
             if not has_frame:
                 continue
 
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            gray = cv2.equalizeHist(gray)
-            faces = face_cascade.detectMultiScale(
-                gray,
-                scaleFactor=1.1,
-                minNeighbors=5,
-                minSize=(40, 40),
-            )
-
-            if len(faces) == 0:
+            _, faces = face_detector.detect(frame)
+            if faces is None or len(faces) == 0:
                 continue
 
-            # Uses the largest face when multiple faces are detected in the sampled frame.
-            x, _, w, _ = max(faces, key=lambda face: face[2] * face[3])
+            # Colunas 0-3 são x, y, w, h; usa o rosto de maior área quando há vários na amostra.
+            x, _, w, _ = max(faces, key=lambda face: face[2] * face[3])[:4]
             face_centers_x.append(float(x) + float(w) / 2.0)
 
         if not face_centers_x:

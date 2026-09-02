@@ -86,6 +86,17 @@ def build_vertical_crop_filter(crop_x: Optional[int] = None) -> str:
     return f"crop=ih*9/16:ih:{max(0, int(crop_x))}:0"
 
 
+def build_vertical_safe_area_filter(safe_area: float) -> str:
+    if not 0.0 <= safe_area <= 0.2:
+        raise ValueError("safe_area must be between 0.0 and 0.2")
+    return "scale=1080:1920"
+
+
+def _safe_text_margins(safe_area: float) -> tuple[int, int]:
+    safe_area_pixels = int(round(1920 * safe_area))
+    return max(80, safe_area_pixels), max(120, safe_area_pixels)
+
+
 def escape_drawtext_text(text: str) -> str:
     return (
         text.replace("\\", "\\\\")
@@ -95,22 +106,46 @@ def escape_drawtext_text(text: str) -> str:
     )
 
 
+FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "fonts")
+
+
 def resolve_title_fontfile() -> Optional[str]:
+    # Fontes embutidas (Anton, DejaVu Sans Bold) evitam depender de fontes do SO; Arial Bold do SO fica como último recurso.
     configured = os.getenv("TAPA_NA_LATA_TITLE_FONT")
     candidates = [
         configured,
+        os.path.join(FONTS_DIR, "Anton-Regular.ttf"),
+        os.path.join(FONTS_DIR, "DejaVuSans-Bold.ttf"),
         r"C:\Windows\Fonts\arialbd.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     ]
     return next((path for path in candidates if path and os.path.isfile(path)), None)
 
 
+def resolve_subtitle_font() -> tuple[str, Optional[str]]:
+    # O nome de família precisa bater com o nome interno da fonte, não com o nome do arquivo.
+    candidates = [
+        ("Sansation", os.path.join(FONTS_DIR, "Sansation-Regular.ttf")),
+        ("Roboto", os.path.join(FONTS_DIR, "Roboto-Regular.ttf")),
+        ("DejaVu Sans", os.path.join(FONTS_DIR, "DejaVuSans.ttf")),
+    ]
+    for family, path in candidates:
+        if os.path.isfile(path):
+            return family, FONTS_DIR
+
+    LOGGER.warning("No bundled subtitle font found; falling back to system font lookup for Arial")
+    return "Arial", None
+
+
 def build_vertical_composite_filter(
     subtitle_path: str,
     title: str = "",
     crop_x: Optional[int] = None,
+    safe_area: float = 0.0,
 ) -> str:
-    filters = [build_vertical_crop_filter(crop_x), "scale=1080:1920"]
+    filters = [build_vertical_crop_filter(crop_x), build_vertical_safe_area_filter(safe_area)]
+    title_y, subtitle_margin_v = _safe_text_margins(safe_area)
+    subtitle_margin_h = int(round(1080 * safe_area))
     if title.strip():
         fontfile = resolve_title_fontfile()
         if fontfile is None:
@@ -121,17 +156,20 @@ def build_vertical_composite_filter(
                 "drawtext="
                 f"fontfile='{escaped_fontfile}':"
                 f"text='{escape_drawtext_text(title.strip())}':"
-                "fontsize=52:fontcolor=yellow:"
-                "borderw=3:bordercolor=black:x=(w-text_w)/2:y=80:"
+                "fontsize=42:fontcolor=yellow:"
+                f"borderw=3:bordercolor=black:x=(w-text_w)/2:y={title_y}:"
                 "enable='between(t,0,5)':alpha='if(lt(t,4),1,5-t)'"
             )
-    subtitle_filter = (
-        f"subtitles=filename='{escape_path_for_ffmpeg_filter(subtitle_path)}':"
-        "force_style='FontName=Arial,FontSize=12,PrimaryColour=&H00FFFFFF,"
+    subtitle_family, subtitle_fonts_dir = resolve_subtitle_font()
+    subtitle_filter_parts = [f"subtitles=filename='{escape_path_for_ffmpeg_filter(subtitle_path)}'"]
+    if subtitle_fonts_dir:
+        subtitle_filter_parts.append(f"fontsdir='{escape_path_for_ffmpeg_filter(subtitle_fonts_dir)}'")
+    subtitle_filter_parts.append(
+        f"force_style='FontName={subtitle_family},FontSize=10,PrimaryColour=&H00FFFFFF,"
         "OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,"
-        "Alignment=2,MarginV=120'"
+        f"Alignment=2,MarginL={subtitle_margin_h},MarginR={subtitle_margin_h},MarginV={subtitle_margin_v}'"
     )
-    filters.append(subtitle_filter)
+    filters.append(":".join(subtitle_filter_parts))
     return ",".join(filters)
 
 
@@ -158,6 +196,7 @@ def format_video_by_classification(
     output_stem: str = "final",
     title: str = "",
     face_tracking: bool = True,
+    safe_area: float = 0.0,
 ) -> Dict[str, str]:
     configure_logging()
 
@@ -177,6 +216,7 @@ def format_video_by_classification(
         resolved_subtitle_path,
         title=title,
         crop_x=crop_x,
+        safe_area=safe_area,
     )
 
     if normalized_classification == "short":
