@@ -106,3 +106,16 @@ def test_face_tracking_failure_uses_center_crop(monkeypatch) -> None:
     monkeypatch.setattr(formatter, "detect_face_crop_x", failing_detector)
 
     assert formatter.resolve_vertical_crop_x("video.mp4", True) is None
+
+
+def test_build_srt_from_captions_preserves_millisecond_precision() -> None:
+    captions = [
+        {"word": "Ola", "start": 0.0, "end": 0.5},
+        {"word": "mundo", "start": 0.523, "end": 1.234},
+    ]
+
+    result = formatter.build_srt_from_captions(captions)
+
+    assert "00:00:00,000 --> 00:00:01,234" in result
+    assert "Ola mundo" in result
+

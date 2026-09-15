@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import shutil
@@ -15,21 +16,26 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from analyzer import analyze_video
+from cutter import cut_by_removed_intervals
 from main import DEFAULT_LUT_PATH, run_pipeline
 from pipeline_contracts import (
     InputValidationError,
     build_output_stem,
+    load_captions_json,
+    normalize_captions_payload,
+    serialize_captions,
     serialize_video_metadata,
-    validate_srt_file,
+    validate_captions_json,
     validate_video_file,
 )
+from segmentation import rebase_captions_to_intervals
 
 LOGGER = logging.getLogger(__name__)
 
 BYTES_PER_MIB = 1024 * 1024
 BYTES_PER_GIB = 1024 * BYTES_PER_MIB
 DEFAULT_MAX_VIDEO_BYTES = 2 * BYTES_PER_GIB
-DEFAULT_MAX_SRT_BYTES = 16 * BYTES_PER_MIB
+DEFAULT_MAX_CAPTIONS_BYTES = 16 * BYTES_PER_MIB
 
 
 def _positive_int_from_env(name: str, default: int) -> int:
@@ -49,8 +55,8 @@ def max_video_bytes() -> int:
     return _positive_int_from_env("TAPA_NA_LATA_MAX_VIDEO_BYTES", DEFAULT_MAX_VIDEO_BYTES)
 
 
-def max_srt_bytes() -> int:
-    return _positive_int_from_env("TAPA_NA_LATA_MAX_SRT_BYTES", DEFAULT_MAX_SRT_BYTES)
+def max_captions_bytes() -> int:
+    return _positive_int_from_env("TAPA_NA_LATA_MAX_CAPTIONS_BYTES", DEFAULT_MAX_CAPTIONS_BYTES)
 
 
 def upload_root() -> Path:
@@ -85,6 +91,15 @@ class EditRequest(BaseModel):
     safe_area: float = Field(default=0.0, ge=0.0, le=0.2)
 
 
+class RemovedInterval(BaseModel):
+    start: float = Field(ge=0.0)
+    end: float
+
+
+class CutRequest(BaseModel):
+    remove_intervals: list[RemovedInterval] = Field(min_length=1)
+
+
 def _project_directory(project_id: str) -> Path:
     try:
         uuid.UUID(project_id)
@@ -100,7 +115,6 @@ def _read_manifest(project_id: str) -> dict[str, Any]:
     manifest_path = _project_directory(project_id) / "manifest.json"
     if not manifest_path.is_file():
         raise HTTPException(status_code=404, detail="Projeto não encontrado.")
-    import json
 
     try:
         return json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -109,8 +123,6 @@ def _read_manifest(project_id: str) -> dict[str, Any]:
 
 
 def _write_manifest(project_id: str, manifest: dict[str, Any]) -> None:
-    import json
-
     path = _project_directory(project_id) / "manifest.json"
     path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -141,16 +153,29 @@ async def _save_upload(upload: UploadFile, destination: Path, maximum_bytes: int
     return total_bytes
 
 
-def _validate_saved_files(video_path: Path, subtitle_path: Path) -> Any:
+def _validate_saved_files(video_path: Path, captions_path: Path) -> Any:
     try:
         metadata = validate_video_file(str(video_path))
-        validate_srt_file(str(subtitle_path))
+        validate_captions_json(str(captions_path))
         return metadata
     except InputValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
+
+
+def _normalize_captions_file(captions_path: Path) -> None:
+    # Reescreve o JSON recebido (legado ou {"legendas":[{"texto",...}]}) no formato interno {word,start,end}.
+    try:
+        raw_payload = json.loads(captions_path.read_text(encoding="utf-8-sig"))
+        normalized = serialize_captions(normalize_captions_payload(raw_payload))
+    except (json.JSONDecodeError, InputValidationError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    captions_path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _run_edit(project_id: str, edit_id: str, request: EditRequest) -> None:
@@ -163,7 +188,7 @@ def _run_edit(project_id: str, edit_id: str, request: EditRequest) -> None:
         state.update({"status": "running", "progress_percent": 10, "stage": "processing"})
         result = run_pipeline(
             str(input_directory / "video.mp4"),
-            str(input_directory / "subtitle.srt"),
+            str(input_directory / "captions.json"),
             project_root=str(project_directory),
             lut_path=request.lut_path or DEFAULT_LUT_PATH,
             output_directory=str(output_directory),
@@ -210,7 +235,7 @@ def health() -> dict[str, str]:
 @app.post("/api/uploads", status_code=status.HTTP_201_CREATED)
 async def create_upload(
     video: Annotated[UploadFile, File(...)],
-    subtitle: Annotated[UploadFile, File(...)],
+    captions: Annotated[UploadFile, File(...)],
     title: Annotated[str, Form(...)],
 ) -> dict[str, object]:
     normalized_title = title.strip()
@@ -221,7 +246,7 @@ async def create_upload(
         )
 
     _extension_for(video, ".mp4")
-    _extension_for(subtitle, ".srt")
+    _extension_for(captions, ".json")
 
     upload_id = str(uuid.uuid4())
     project_id = str(uuid.uuid4())
@@ -229,12 +254,13 @@ async def create_upload(
     input_directory = directory / "input"
     input_directory.mkdir(parents=True, exist_ok=False)
     video_path = input_directory / "video.mp4"
-    subtitle_path = input_directory / "subtitle.srt"
+    captions_path = input_directory / "captions.json"
 
     try:
         video_size = await _save_upload(video, video_path, max_video_bytes())
-        subtitle_size = await _save_upload(subtitle, subtitle_path, max_srt_bytes())
-        metadata_object = _validate_saved_files(video_path, subtitle_path)
+        captions_size = await _save_upload(captions, captions_path, max_captions_bytes())
+        _normalize_captions_file(captions_path)
+        metadata_object = _validate_saved_files(video_path, captions_path)
     except HTTPException:
         shutil.rmtree(directory, ignore_errors=True)
         raise
@@ -255,7 +281,7 @@ async def create_upload(
         "project_id": project_id,
         "upload_id": upload_id,
         "title": normalized_title,
-        "input": {"video": "input/video.mp4", "subtitle": "input/subtitle.srt"},
+        "input": {"video": "input/video.mp4", "captions": "input/captions.json"},
         "metadata": metadata,
     }
     _write_manifest(project_id, manifest)
@@ -268,7 +294,7 @@ async def create_upload(
         "metadata": metadata,
         "files": {
             "video": {"filename": video.filename, "size_bytes": video_size},
-            "subtitle": {"filename": subtitle.filename, "size_bytes": subtitle_size},
+            "captions": {"filename": captions.filename, "size_bytes": captions_size},
         },
     }
 
@@ -280,6 +306,73 @@ def project_metadata(project_id: str) -> dict[str, Any]:
         "project_id": project_id,
         "title": manifest["title"],
         "metadata": manifest["metadata"],
+    }
+
+
+@app.get("/api/projects/{project_id}/video")
+def project_video(project_id: str) -> FileResponse:
+    video_path = _project_directory(project_id) / "input" / "video.mp4"
+    if not video_path.is_file():
+        raise HTTPException(status_code=404, detail="Vídeo não encontrado.")
+    return FileResponse(video_path, media_type="video/mp4")
+
+
+@app.get("/api/projects/{project_id}/captions")
+def project_captions(project_id: str) -> dict[str, Any]:
+    captions_path = _project_directory(project_id) / "input" / "captions.json"
+    if not captions_path.is_file():
+        raise HTTPException(status_code=404, detail="Legendas não encontradas.")
+    return {"project_id": project_id, "captions": load_captions_json(str(captions_path))}
+
+
+@app.post("/api/projects/{project_id}/cuts", status_code=status.HTTP_201_CREATED)
+def create_cut(project_id: str, request: CutRequest) -> dict[str, Any]:
+    manifest = _read_manifest(project_id)
+    project_directory = _project_directory(project_id)
+    input_directory = project_directory / "input"
+    video_path = input_directory / "video.mp4"
+    captions_path = input_directory / "captions.json"
+
+    total_duration = float(manifest["metadata"]["duration_seconds"])
+    captions = load_captions_json(str(captions_path))
+    remove_intervals = [(interval.start, interval.end) for interval in request.remove_intervals]
+
+    cut_id = str(uuid.uuid4())
+    cut_directory = project_directory / "cuts" / cut_id
+    cut_directory.mkdir(parents=True, exist_ok=True)
+    cut_video_path = cut_directory / "video.mp4"
+
+    try:
+        cut_result = cut_by_removed_intervals(
+            str(video_path),
+            remove_intervals,
+            total_duration,
+            output_path=str(cut_video_path),
+            work_dir=str(cut_directory),
+        )
+    except ValueError as exc:
+        shutil.rmtree(cut_directory, ignore_errors=True)
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    rebased_captions = rebase_captions_to_intervals(captions, cut_result["keep_intervals"])
+    new_metadata = serialize_video_metadata(validate_video_file(cut_result["output_path"]))
+
+    shutil.copy2(cut_result["output_path"], video_path)
+    captions_path.write_text(
+        json.dumps(rebased_captions, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    shutil.rmtree(cut_directory, ignore_errors=True)
+
+    manifest["metadata"] = new_metadata
+    _write_manifest(project_id, manifest)
+
+    return {
+        "project_id": project_id,
+        "cut_id": cut_id,
+        "metadata": new_metadata,
+        "video_url": f"/api/projects/{project_id}/video?v={cut_id}",
+        "captions": rebased_captions,
     }
 
 

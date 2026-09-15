@@ -267,6 +267,69 @@ def cut_from_whisper_json(
     }
 
 
+def compute_keep_intervals(
+    remove_intervals: Sequence[SpeechInterval],
+    total_duration: float,
+) -> List[SpeechInterval]:
+    if total_duration <= 0:
+        raise ValueError("total_duration must be greater than zero.")
+
+    normalized_removals: List[SpeechInterval] = []
+    for start, end in remove_intervals:
+        start_value = float(start)
+        end_value = float(end)
+        if start_value < 0 or end_value <= start_value or end_value > total_duration + 1e-6:
+            raise ValueError(f"Invalid interval to remove: ({start_value}, {end_value}).")
+        normalized_removals.append((start_value, end_value))
+
+    normalized_removals.sort(key=lambda interval: interval[0])
+
+    merged_removals: List[SpeechInterval] = []
+    for start, end in normalized_removals:
+        if merged_removals and start <= merged_removals[-1][1] + 1e-9:
+            previous_start, previous_end = merged_removals[-1]
+            merged_removals[-1] = (previous_start, max(previous_end, end))
+        else:
+            merged_removals.append((start, end))
+
+    keep_intervals: List[SpeechInterval] = []
+    cursor = 0.0
+    for start, end in merged_removals:
+        if start > cursor:
+            keep_intervals.append((cursor, start))
+        cursor = max(cursor, end)
+
+    if cursor < total_duration:
+        keep_intervals.append((cursor, total_duration))
+
+    if not keep_intervals:
+        raise ValueError("Removing the requested intervals would leave no video content.")
+
+    return keep_intervals
+
+
+def cut_by_removed_intervals(
+    video_path: str,
+    remove_intervals: Sequence[SpeechInterval],
+    total_duration: float,
+    output_path: Optional[str] = None,
+    work_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    keep_intervals = compute_keep_intervals(remove_intervals, total_duration)
+    resolved_output_path = cut_video_with_ffmpeg(
+        video_path,
+        keep_intervals,
+        output_path=output_path,
+        work_dir=work_dir,
+    )
+
+    return {
+        "output_path": resolved_output_path,
+        "keep_intervals": keep_intervals,
+        "preserved_intervals": serialize_intervals(keep_intervals),
+    }
+
+
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Cut a video using speech intervals from a Whisper JSON and build cortes_brutos.mp4.",

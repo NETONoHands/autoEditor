@@ -27,6 +27,55 @@ class SubtitleCue:
     end: float
 
 
+def extract_caption_intervals(captions: Sequence[dict]) -> list[SpeechInterval]:
+    return [(float(item["start"]), float(item["end"])) for item in captions]
+
+
+def rebase_captions_to_window(captions: Sequence[dict], window: TimeWindow) -> list[dict]:
+    rebased: list[dict] = []
+    for item in captions:
+        start = float(item["start"])
+        end = float(item["end"])
+        if end <= window.start or start >= window.end:
+            continue
+        clipped_start = max(start, window.start) - window.start
+        clipped_end = min(end, window.end) - window.start
+        rebased.append({"word": item["word"], "start": clipped_start, "end": clipped_end})
+    return rebased
+
+
+def rebase_captions_to_intervals(
+    captions: Sequence[dict],
+    keep_intervals: Sequence[SpeechInterval],
+) -> list[dict]:
+    normalized_intervals = sorted((float(start), float(end)) for start, end in keep_intervals)
+    rebased: list[dict] = []
+    for item in captions:
+        start = float(item["start"])
+        end = float(item["end"])
+        for interval_start, interval_end in normalized_intervals:
+            overlap_start = max(start, interval_start)
+            overlap_end = min(end, interval_end)
+            if overlap_end <= overlap_start:
+                continue
+            elapsed_before = 0.0
+            previous_end = 0.0
+            for previous_start, previous_interval_end in normalized_intervals:
+                if previous_start > overlap_start:
+                    break
+                elapsed_before += max(0.0, previous_start - previous_end)
+                previous_end = previous_interval_end
+            rebased.append(
+                {
+                    "word": item["word"],
+                    "start": overlap_start - elapsed_before,
+                    "end": overlap_end - elapsed_before,
+                }
+            )
+            break
+    return rebased
+
+
 def normalize_subtitle_cues(
     cues: Sequence[SubtitleCue],
     words_per_line: int = 4,

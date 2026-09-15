@@ -1,11 +1,14 @@
 import argparse
+import json
 import logging
 import os
-import shutil
 import subprocess
-from typing import Dict, Optional
+import tempfile
+from typing import Any, Dict, List, Optional
 
 from face_tracker import detect_face_crop_x
+from pipeline_contracts import normalize_captions_payload, serialize_captions
+from segmentation import SubtitleCue, _format_timestamp
 
 
 def _run_ffmpeg_with_fallback(command: list[str]) -> None:
@@ -173,6 +176,33 @@ def build_vertical_composite_filter(
     return ",".join(filters)
 
 
+def build_srt_from_captions(
+    captions: List[Dict[str, Any]],
+    words_per_line: int = 4,
+    lines_per_cue: int = 2,
+) -> str:
+    # Legendas queimadas agrupam palavras em cues; os tempos originais do JSON não são arredondados.
+    max_words = words_per_line * lines_per_cue
+    chunks = [captions[index:index + max_words] for index in range(0, len(captions), max_words)]
+    cues = [
+        SubtitleCue(
+            "\n".join(
+                " ".join(str(word["word"]) for word in chunk[line:line + words_per_line])
+                for line in range(0, len(chunk), words_per_line)
+            ),
+            float(chunk[0]["start"]),
+            float(chunk[-1]["end"]),
+        )
+        for chunk in chunks
+        if chunk
+    ]
+    blocks = [
+        "\n".join([str(index), f"{_format_timestamp(cue.start)} --> {_format_timestamp(cue.end)}", cue.text])
+        for index, cue in enumerate(cues, start=1)
+    ]
+    return "\n\n".join(blocks) + ("\n" if blocks else "")
+
+
 def resolve_vertical_crop_x(video_path: str, face_tracking: bool) -> Optional[int]:
     if not face_tracking:
         return None
@@ -190,7 +220,7 @@ def run_ffmpeg(command: list[str]) -> None:
 
 def format_video_by_classification(
     base_tratada_path: str,
-    subtitle_path: str,
+    captions: List[Dict[str, Any]],
     classification: str,
     output_directory: Optional[str] = None,
     output_stem: str = "final",
@@ -205,19 +235,50 @@ def format_video_by_classification(
         raise ValueError("classification must be 'short' or 'long'")
 
     resolved_video_path = validate_input_file(base_tratada_path, "Input video")
-    resolved_subtitle_path = validate_input_file(subtitle_path, "Subtitle SRT")
     resolved_output_directory = os.path.abspath(
         output_directory or ensure_output_directory(os.getcwd())
     )
     os.makedirs(resolved_output_directory, exist_ok=True)
 
-    crop_x = resolve_vertical_crop_x(resolved_video_path, face_tracking)
-    vertical_filter = build_vertical_composite_filter(
-        resolved_subtitle_path,
-        title=title,
-        crop_x=crop_x,
-        safe_area=safe_area,
-    )
+    captions_json_path = os.path.join(resolved_output_directory, f"{output_stem}.json")
+    with open(captions_json_path, "w", encoding="utf-8") as captions_file:
+        json.dump(captions, captions_file, ensure_ascii=False, indent=2)
+    LOGGER.info("Saved captions JSON to %s", captions_json_path)
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".srt", delete=False, encoding="utf-8", dir=resolved_output_directory
+    ) as temp_srt_file:
+        temp_srt_file.write(build_srt_from_captions(captions))
+        temp_subtitle_path = temp_srt_file.name
+
+    try:
+        crop_x = resolve_vertical_crop_x(resolved_video_path, face_tracking)
+        vertical_filter = build_vertical_composite_filter(
+            temp_subtitle_path,
+            title=title,
+            crop_x=crop_x,
+            safe_area=safe_area,
+        )
+        return _render_classified_outputs(
+            resolved_video_path,
+            vertical_filter,
+            normalized_classification,
+            resolved_output_directory,
+            output_stem,
+            captions_json_path,
+        )
+    finally:
+        os.remove(temp_subtitle_path)
+
+
+def _render_classified_outputs(
+    resolved_video_path: str,
+    vertical_filter: str,
+    normalized_classification: str,
+    resolved_output_directory: str,
+    output_stem: str,
+    captions_json_path: str,
+) -> Dict[str, str]:
 
     if normalized_classification == "short":
         final_vertical_legendado = os.path.join(
@@ -292,6 +353,7 @@ def format_video_by_classification(
             "classification": normalized_classification,
             "final_vertical_legendado": final_vertical_legendado,
             "final_horizontal_legendado": final_horizontal_legendado,
+            "captions_json": captions_json_path,
         }
 
     final_horizontal = os.path.join(resolved_output_directory, f"{output_stem}-horizontal.mp4")
@@ -345,18 +407,11 @@ def format_video_by_classification(
     ]
     _run_ffmpeg_with_fallback(long_vertical_command)
 
-    copied_srt_path = os.path.join(
-        resolved_output_directory,
-        f"{output_stem}.srt",
-    )
-    shutil.copy2(resolved_subtitle_path, copied_srt_path)
-    LOGGER.info("Copied subtitle to %s", copied_srt_path)
-
     return {
         "classification": normalized_classification,
         "final_horizontal": final_horizontal,
         "final_vertical": final_vertical,
-        "copied_srt": copied_srt_path,
+        "captions_json": captions_json_path,
     }
 
 
@@ -365,7 +420,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         description="Format base_tratada.mp4 outputs based on short/long classification.",
     )
     parser.add_argument("video", help="Path to base_tratada.mp4")
-    parser.add_argument("srt", help="Path to the original SRT file")
+    parser.add_argument("captions", help="Path to the captions JSON file ([{word, start, end}, ...])")
     parser.add_argument("classification", help="short or long")
     parser.add_argument(
         "--output-dir",
@@ -382,9 +437,11 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        with open(args.captions, encoding="utf-8-sig") as captions_file:
+            captions = serialize_captions(normalize_captions_payload(json.load(captions_file)))
         format_video_by_classification(
             args.video,
-            args.srt,
+            captions,
             args.classification,
             output_directory=args.output_dir,
             output_stem="final",

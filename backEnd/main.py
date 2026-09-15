@@ -11,20 +11,19 @@ from formatter import format_video_by_classification
 from pipeline_contracts import (
     InputValidationError,
     build_output_stem,
+    load_captions_json,
     validate_dependencies,
-    validate_srt_file,
     validate_output_video,
     validate_video_file,
     validate_vertical_output,
 )
 from segmentation import (
-    extract_srt_intervals,
-    rebase_srt,
-    rebase_srt_to_intervals,
+    extract_caption_intervals,
+    rebase_captions_to_intervals,
+    rebase_captions_to_window,
     split_at_speech_boundaries,
     split_video_with_ffmpeg,
 )
-from transcriber import transcribe_video_to_json
 
 
 LOGGER = logging.getLogger(__name__)
@@ -49,7 +48,7 @@ def configure_logging() -> None:
 
 def run_pipeline(
     raw_video_path: str,
-    subtitle_path: str,
+    captions_path: str,
     project_root: Optional[str] = None,
     lut_path: str = DEFAULT_LUT_PATH,
     output_directory: Optional[str] = None,
@@ -73,7 +72,7 @@ def run_pipeline(
 
     validate_dependencies()
     resolved_video_path = validate_video_file(raw_video_path).path
-    resolved_subtitle_path = validate_srt_file(subtitle_path)
+    captions = load_captions_json(captions_path)
     metadata = analyze_video(resolved_video_path)
     classification = metadata.classification
     output_stem = build_output_stem(output_name)
@@ -82,10 +81,9 @@ def run_pipeline(
         resolved_lut_path = os.path.join(resolved_project_root, resolved_lut_path)
     LOGGER.info("Step 1/3 completed: analyzer (%s)", classification)
 
-    subtitle_content = open(resolved_subtitle_path, encoding="utf-8-sig").read()
     windows = split_at_speech_boundaries(
         metadata.duration_seconds,
-        extract_srt_intervals(subtitle_content),
+        extract_caption_intervals(captions),
     )
     is_split = len(windows) > 1
     if is_split:
@@ -105,39 +103,19 @@ def run_pipeline(
         treated_paths: list[str] = []
         preserved_intervals: list[dict[str, float]] = []
         cut_video_metadata: list[dict[str, object]] = []
-        published_srt_paths: list[str] = []
+        published_captions_paths: list[str] = []
         vertical_output_metadata: list[dict[str, object]] = []
         for index, source_path in enumerate(source_paths, start=1):
             part_stem = build_output_stem(output_name, index) if is_split else output_stem
-            part_srt_path = resolved_subtitle_path
-            part_srt_content = subtitle_content
-            if is_split:
-                part_srt_path = os.path.join(work_directory, f"{part_stem}.srt")
-                part_srt_content = rebase_srt(subtitle_content, windows[index - 1])
-                with open(part_srt_path, "w", encoding="utf-8") as part_file:
-                    part_file.write(part_srt_content)
+            part_captions = rebase_captions_to_window(captions, windows[index - 1]) if is_split else captions
 
             edit_source_path = source_path
             if remove_silence:
-                transcript_path = os.path.join(work_directory, f"{part_stem}-transcript.json")
-                transcript = transcribe_video_to_json(
-                    source_path,
-                    part_srt_path,
-                    project_root=work_directory,
-                    output_json_path=transcript_path,
-                )
                 intervals = extract_speech_intervals(
-                    transcript["payload"],
+                    {"words": part_captions},
                     silence_threshold=silence_threshold,
                 )
-                final_srt_path = os.path.join(
-                    resolved_output_directory,
-                    f"{part_stem}.srt",
-                )
-                with open(final_srt_path, "w", encoding="utf-8") as final_srt_file:
-                    final_srt_file.write(rebase_srt_to_intervals(part_srt_content, intervals))
-                validate_srt_file(final_srt_path)
-                published_srt_paths.append(os.path.basename(final_srt_path))
+                part_captions = rebase_captions_to_intervals(part_captions, intervals)
                 preserved_intervals.extend(
                     {"start": start, "end": end, "duration": end - start}
                     for start, end in intervals
@@ -150,7 +128,6 @@ def run_pipeline(
                     work_dir=work_directory,
                 )
                 cut_video_metadata.append(validate_output_video(edit_source_path))
-                part_srt_path = final_srt_path
 
             base_treated_path = os.path.join(resolved_output_directory, f"{part_stem}-tratado.mp4")
             if os.path.exists(base_treated_path):
@@ -162,7 +139,7 @@ def run_pipeline(
             )
             formatting_result = format_video_by_classification(
                 treated_video_path,
-                part_srt_path,
+                part_captions,
                 classification,
                 output_directory=resolved_output_directory,
                 output_stem=part_stem,
@@ -170,13 +147,7 @@ def run_pipeline(
                 face_tracking=face_tracking,
                 safe_area=safe_area,
             )
-            if remove_silence and not os.path.isfile(os.path.join(resolved_output_directory, f"{part_stem}.srt")):
-                published_srt_path = os.path.join(resolved_output_directory, f"{part_stem}.srt")
-                with open(published_srt_path, "w", encoding="utf-8") as published_srt_file:
-                    with open(part_srt_path, encoding="utf-8-sig") as source_srt_file:
-                        published_srt_file.write(source_srt_file.read())
-                validate_srt_file(published_srt_path)
-                published_srt_paths.append(os.path.basename(published_srt_path))
+            published_captions_paths.append(os.path.basename(formatting_result["captions_json"]))
             treated_paths.append(treated_video_path)
             formatted_outputs.append(formatting_result)
 
@@ -210,7 +181,7 @@ def run_pipeline(
             "silence_threshold": silence_threshold,
             "preserved_intervals": preserved_intervals,
             "cut_videos": cut_video_metadata,
-            "published_srt_paths": published_srt_paths,
+            "published_captions_paths": published_captions_paths,
             "vertical_outputs": vertical_output_metadata,
         },
     }
@@ -221,7 +192,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         description="Executa a edição Tapa na Lata.",
     )
     parser.add_argument("video", help="Path to the raw input video")
-    parser.add_argument("srt", help="Path to the respective SRT subtitle file")
+    parser.add_argument("captions", help="Path to the captions JSON file ([{word, start, end}, ...])")
     parser.add_argument("name", help="Nome da edição; palavras serão separadas por hífens")
     parser.add_argument(
         "--project-root",
@@ -266,7 +237,7 @@ def main() -> int:
     try:
         run_pipeline(
             args.video,
-            args.srt,
+            args.captions,
             output_name=args.name,
             project_root=args.project_root,
             lut_path=args.lut_path,

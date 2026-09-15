@@ -84,3 +84,53 @@ def test_segment_cut_retries_with_libx264_when_nvenc_fails(monkeypatch) -> None:
     assert fallback[fallback.index("-c:v") + 1] == "libx264"
     assert fallback[fallback.index("-crf") + 1] == "23"
     assert fallback[fallback.index("-preset") + 1] == "fast"
+
+
+def test_compute_keep_intervals_returns_complement_of_removed_ranges() -> None:
+    result = cutter.compute_keep_intervals([(1.0, 3.0), (5.0, 6.0)], total_duration=10.0)
+
+    assert result == [(0.0, 1.0), (3.0, 5.0), (6.0, 10.0)]
+
+
+def test_compute_keep_intervals_merges_overlapping_removals() -> None:
+    result = cutter.compute_keep_intervals([(2.0, 4.0), (3.5, 5.0)], total_duration=10.0)
+
+    assert result == [(0.0, 2.0), (5.0, 10.0)]
+
+
+def test_compute_keep_intervals_rejects_invalid_range() -> None:
+    with pytest.raises(ValueError):
+        cutter.compute_keep_intervals([(5.0, 3.0)], total_duration=10.0)
+
+    with pytest.raises(ValueError):
+        cutter.compute_keep_intervals([(0.0, 11.0)], total_duration=10.0)
+
+
+def test_compute_keep_intervals_rejects_removing_everything() -> None:
+    with pytest.raises(ValueError):
+        cutter.compute_keep_intervals([(0.0, 10.0)], total_duration=10.0)
+
+
+def test_cut_by_removed_intervals_cuts_the_complement(tmp_path: Path, monkeypatch) -> None:
+    video_path = tmp_path / "input.mp4"
+    output_path = tmp_path / "output.mp4"
+    video_path.write_bytes(b"input")
+    captured_intervals: list = []
+
+    def fake_cut_video_with_ffmpeg(video, intervals, output_path=None, work_dir=None):
+        captured_intervals.append(intervals)
+        Path(output_path).write_bytes(b"output")
+        return output_path
+
+    monkeypatch.setattr(cutter, "cut_video_with_ffmpeg", fake_cut_video_with_ffmpeg)
+
+    result = cutter.cut_by_removed_intervals(
+        str(video_path),
+        [(2.0, 4.0)],
+        total_duration=10.0,
+        output_path=str(output_path),
+    )
+
+    assert captured_intervals == [[(0.0, 2.0), (4.0, 10.0)]]
+    assert result["keep_intervals"] == [(0.0, 2.0), (4.0, 10.0)]
+    assert result["output_path"] == str(output_path)

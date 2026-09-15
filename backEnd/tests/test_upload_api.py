@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -11,14 +12,17 @@ from pipeline_contracts import VideoMetadata
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("TAPA_NA_LATA_UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setenv("TAPA_NA_LATA_MAX_VIDEO_BYTES", "100")
-    monkeypatch.setenv("TAPA_NA_LATA_MAX_SRT_BYTES", "200")
+    monkeypatch.setenv("TAPA_NA_LATA_MAX_CAPTIONS_BYTES", "200")
     monkeypatch.setattr(
         upload_api,
         "_validate_saved_files",
-        lambda video, subtitle: VideoMetadata(str(video), 10.0, 1280, 720, "h264", video.stat().st_size),
+        lambda video, captions: VideoMetadata(str(video), 10.0, 1280, 720, "h264", video.stat().st_size),
     )
     upload_api.EDIT_STATES.clear()
     return TestClient(upload_api.app)
+
+
+CAPTIONS_JSON = b'[{"word": "Ola", "start": 0.0, "end": 1.0}]'
 
 
 def _upload_project(client: TestClient) -> str:
@@ -27,7 +31,7 @@ def _upload_project(client: TestClient) -> str:
         data={"title": "Minha live"},
         files={
             "video": ("entrada.mp4", b"1234567890", "video/mp4"),
-            "subtitle": ("legenda.srt", b"1\n00:00:00,000 --> 00:00:01,000\nOla\n", "text/plain"),
+            "captions": ("legenda.json", CAPTIONS_JSON, "application/json"),
         },
     )
     assert response.status_code == 201
@@ -41,13 +45,36 @@ def test_health(client: TestClient) -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_upload_normalizes_legendas_texto_format_to_internal_captions(client: TestClient) -> None:
+    legendas_payload = json.dumps(
+        {"legendas": [{"texto": "Ola", "start": 0.0, "end": 0.5}, {"texto": "mundo", "start": 0.6, "end": 1.2}]}
+    ).encode("utf-8")
+
+    response = client.post(
+        "/api/uploads",
+        data={"title": "Minha live"},
+        files={
+            "video": ("entrada.mp4", b"1234567890", "video/mp4"),
+            "captions": ("legenda.json", legendas_payload, "application/json"),
+        },
+    )
+
+    assert response.status_code == 201
+    project_id = response.json()["project_id"]
+    captions_path = upload_api.upload_root() / project_id / "input" / "captions.json"
+    assert json.loads(captions_path.read_text(encoding="utf-8")) == [
+        {"word": "Ola", "start": 0.0, "end": 0.5},
+        {"word": "mundo", "start": 0.6, "end": 1.2},
+    ]
+
+
 def test_upload_accepts_valid_files_and_does_not_expose_path(client: TestClient) -> None:
     response = client.post(
         "/api/uploads",
         data={"title": "Minha live especial"},
         files={
             "video": ("entrada.mp4", b"1234567890", "video/mp4"),
-            "subtitle": ("legenda.srt", b"1\n00:00:00,000 --> 00:00:01,000\nOla\n", "text/plain"),
+            "captions": ("legenda.json", CAPTIONS_JSON, "application/json"),
         },
     )
 
@@ -65,7 +92,7 @@ def test_upload_rejects_empty_title(client: TestClient) -> None:
         data={"title": "   "},
         files={
             "video": ("entrada.mp4", b"video", "video/mp4"),
-            "subtitle": ("legenda.srt", b"srt", "text/plain"),
+            "captions": ("legenda.json", CAPTIONS_JSON, "application/json"),
         },
     )
 
@@ -79,7 +106,7 @@ def test_upload_rejects_invalid_extensions(client: TestClient) -> None:
         data={"title": "Teste"},
         files={
             "video": ("entrada.mov", b"video", "video/quicktime"),
-            "subtitle": ("legenda.txt", b"srt", "text/plain"),
+            "captions": ("legenda.txt", b"srt", "text/plain"),
         },
     )
 
@@ -93,7 +120,7 @@ def test_upload_rejects_video_above_configured_limit(client: TestClient) -> None
         data={"title": "Teste"},
         files={
             "video": ("entrada.mp4", b"x" * 101, "video/mp4"),
-            "subtitle": ("legenda.srt", b"srt", "text/plain"),
+            "captions": ("legenda.json", CAPTIONS_JSON, "application/json"),
         },
     )
 
@@ -106,7 +133,7 @@ def test_upload_rejects_missing_title(client: TestClient) -> None:
         "/api/uploads",
         files={
             "video": ("entrada.mp4", b"video", "video/mp4"),
-            "subtitle": ("legenda.srt", b"srt", "text/plain"),
+            "captions": ("legenda.json", CAPTIONS_JSON, "application/json"),
         },
     )
 
@@ -190,3 +217,50 @@ def test_download_is_blocked_before_edit_completion(client: TestClient) -> None:
     )
 
     assert response.status_code == 409
+
+
+def test_create_cut_removes_interval_and_rebases_captions(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_id = _upload_project(client)
+    input_directory = upload_api.upload_root() / project_id / "input"
+    (input_directory / "captions.json").write_text(
+        json.dumps(
+            [
+                {"word": "Ola", "start": 0.0, "end": 1.0},
+                {"word": "Mundo", "start": 4.0, "end": 5.0},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    manifest = upload_api._read_manifest(project_id)
+    manifest["metadata"]["duration_seconds"] = 5.0
+    upload_api._write_manifest(project_id, manifest)
+
+    def fake_cut(video_path, remove_intervals, total_duration, output_path=None, work_dir=None):
+        from cutter import compute_keep_intervals
+
+        Path(output_path).write_bytes(b"cutvideo")
+        keep_intervals = compute_keep_intervals(remove_intervals, total_duration)
+        return {"output_path": output_path, "keep_intervals": keep_intervals, "preserved_intervals": []}
+
+    monkeypatch.setattr(upload_api, "cut_by_removed_intervals", fake_cut)
+    monkeypatch.setattr(
+        upload_api,
+        "validate_video_file",
+        lambda path: VideoMetadata(str(path), 3.0, 1280, 720, "h264", Path(path).stat().st_size),
+    )
+
+    response = client.post(
+        f"/api/projects/{project_id}/cuts",
+        json={"remove_intervals": [{"start": 1.0, "end": 3.0}]},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["metadata"]["duration_seconds"] == 3.0
+    captions = body["captions"]
+    assert captions[0] == {"word": "Ola", "start": 0.0, "end": 1.0}
+    assert captions[1]["word"] == "Mundo"
+    assert captions[1]["start"] == pytest.approx(2.0)
+    assert captions[1]["end"] == pytest.approx(3.0)
