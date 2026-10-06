@@ -1,0 +1,12 @@
+.crop-selector{margin-top:28px}
+.crop-selector-hint{margin:0 0 10px;color:var(--muted);font-size:13px;line-height:1.5}
+.crop-selector-error{color:var(--red);font-size:13px}
+.crop-selector-image{position:relative;width:100%;overflow:hidden;border:1px solid var(--line);background:#111}
+.crop-selector-image img{display:block;width:100%;height:auto;user-select:none}
+.crop-selector-image.is-dragging{cursor:crosshair}
+.crop-selector-vertical-frame{position:absolute;top:0;bottom:0;border-right:2px solid var(--acid);border-left:2px solid var(--acid);box-shadow:0 0 0 100vmax rgb(0 0 0 / 38%);pointer-events:none}
+.crop-selector-rectangle{position:absolute;z-index:1;border:2px solid var(--red);background:rgb(228 93 69 / 16%);pointer-events:none}
+.crop-selector-actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}
+.crop-selector-actions .primary-button,.crop-selector-actions .secondary-button{width:auto;max-width:none;margin-top:0}
+.crop-selector-actions .secondary-button{padding:16px 20px}
+@media(max-width:760px){.crop-selector-actions{display:grid}.crop-selector-actions .primary-button,.crop-selector-actions .secondary-button{width:100%}}

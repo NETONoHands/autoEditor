@@ -106,18 +106,32 @@ def build_vertical_crop_filter(
     crop_h: Optional[int] = None,
     face_crop_x: Optional[int] = None,
 ) -> str:
-    # Garante explicitamente que todos foram enviados e são válidos
-    if crop_x is not None and crop_y is not None and crop_w is not None and crop_h is not None:
-        if crop_w > 0 and crop_h > 0:
-            safe_x = max(0, int(crop_x))
-            safe_y = max(0, int(crop_y))
-            return f"crop={int(crop_w)}:{int(crop_h)}:{safe_x}:{safe_y}"
+    if (
+        crop_x is not None
+        and crop_y is not None
+        and crop_w is not None
+        and crop_h is not None
+        and crop_w > 0
+        and crop_h > 0
+    ):
+        # Keep the full source height; use the selected camera box only to anchor the horizontal crop.
+        safe_x = max(0, int(crop_x))
+        crop_width = int(crop_w)
+        crop_x_expression = (
+            f"max(0\\,min(iw-ow\\,{safe_x}+{crop_width}/2-ow/2))"
+        )
+        crop_filter = f"crop=min(ih*9/16\\,iw):ih:{crop_x_expression}:0"
+    elif face_crop_x is None:
+        crop_filter = build_center_crop_9x16_filter()
+    else:
+        crop_x_expression = f"max(0\\,min(iw-ow\\,{max(0, int(face_crop_x))}))"
+        crop_filter = f"crop=min(ih*9/16\\,iw):ih:{crop_x_expression}:0"
 
-    # Fallback se faltou algum parâmetro ou se a área for inválida
-    if face_crop_x is None:
-        return build_center_crop_9x16_filter()
-        
-    return f"crop=ih*9/16:ih:{max(0, int(face_crop_x))}:0"
+    return (
+        f"{crop_filter},"
+        "scale=1080:1920:force_original_aspect_ratio=decrease,"
+        "pad=1080:1920:(ow-iw)/2:(oh-ih)/2"
+    )
 
 
 def build_vertical_safe_area_filter(safe_area: float) -> str:

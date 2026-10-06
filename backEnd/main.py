@@ -5,7 +5,12 @@ import tempfile
 from typing import Any, Dict, Optional
 
 from analyzer import analyze_video
-from cutter import DEFAULT_SILENCE_THRESHOLD, cut_video_with_ffmpeg, extract_speech_intervals
+from cutter import (
+    DEFAULT_SILENCE_THRESHOLD,
+    compute_auto_remove_intervals,
+    compute_keep_intervals,
+    cut_video_with_ffmpeg,
+)
 from enhancer import enhance_video_with_ffmpeg
 from formatter import format_video_by_classification
 from pipeline_contracts import (
@@ -115,9 +120,15 @@ def run_pipeline(
 
             edit_source_path = source_path
             if remove_silence:
-                intervals = extract_speech_intervals(
-                    {"words": part_captions},
-                    silence_threshold=silence_threshold,
+                part_duration = windows[index - 1].duration if is_split else metadata.duration_seconds
+                intervals = compute_keep_intervals(
+                    compute_auto_remove_intervals(
+                        source_path,
+                        part_captions,
+                        part_duration,
+                        silence_duration=silence_threshold,
+                    ),
+                    part_duration,
                 )
                 part_captions = rebase_captions_to_intervals(part_captions, intervals)
                 preserved_intervals.extend(

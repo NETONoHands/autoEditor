@@ -1,4 +1,4 @@
-import type { Caption, CutResponse, Edit, EditConfig, RemoveInterval, Upload } from './types'
+import type { Caption, CutResponse, Edit, EditConfig, RemoveInterval, SuggestedCuts, Upload } from './types'
 
 export const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
 
@@ -15,6 +15,10 @@ export function uploadProject(video: File, captions: File, title: string): Promi
   form.append('captions', captions)
   form.append('title', title)
   return api<Upload>('/api/uploads', { method: 'POST', body: form })
+}
+
+export function getSuggestedCuts(projectId: string): Promise<SuggestedCuts> {
+  return api<SuggestedCuts>(`/api/projects/${projectId}/suggested-cuts`)
 }
 
 export function requestCut(projectId: string, removeIntervals: RemoveInterval[]): Promise<CutResponse> {

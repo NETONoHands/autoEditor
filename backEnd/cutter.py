@@ -39,7 +39,7 @@ def load_whisper_json(json_path: str) -> Dict[str, Any]:
         return json.load(json_file)
 
 
-DEFAULT_SILENCE_THRESHOLD = 0.1
+DEFAULT_SILENCE_THRESHOLD = 0.2
 
 
 def extract_speech_intervals(
@@ -265,6 +265,62 @@ def cut_from_whisper_json(
         "preserved_intervals": serialize_intervals(intervals),
         "output_path": resolved_output_path,
     }
+
+
+DEFAULT_MERGE_GAP = 0.15
+
+
+def merge_intervals(
+    silences: Sequence[Dict[str, float]],
+    disfluencies: Sequence[Dict[str, float]],
+    min_gap: float = DEFAULT_MERGE_GAP,
+) -> List[Dict[str, float]]:
+    """Combine removal intervals, merging overlapping or nearly adjacent ones.
+
+    Intervals separated by ``min_gap`` seconds or less are merged to avoid
+    micro-cuts that would leave tiny fragments of video between removals.
+    """
+    combined = sorted(
+        (
+            {"start": float(item["start"]), "end": float(item["end"])}
+            for item in (*silences, *disfluencies)
+            if float(item["end"]) > float(item["start"])
+        ),
+        key=lambda item: item["start"],
+    )
+
+    merged: List[Dict[str, float]] = []
+    for item in combined:
+        if merged and item["start"] - merged[-1]["end"] <= min_gap + 1e-9:
+            merged[-1]["end"] = max(merged[-1]["end"], item["end"])
+        else:
+            merged.append(item)
+
+    return merged
+
+
+def compute_auto_remove_intervals(
+    video_path: str,
+    captions: Sequence[Dict[str, Any]],
+    total_duration: float,
+    silence_duration: float = 0.3,
+) -> List[SpeechInterval]:
+    """Automatic cut: audio silences combined with repeated words in captions."""
+    from disfluency_detector import detect_disfluencies
+    from silence_detector import detect_silences
+
+    merged = merge_intervals(
+        detect_silences(video_path, duration=silence_duration),
+        detect_disfluencies(list(captions)),
+    )
+
+    removals: List[SpeechInterval] = []
+    for item in merged:
+        start = max(0.0, item["start"])
+        end = min(total_duration, item["end"])
+        if end > start:
+            removals.append((start, end))
+    return removals
 
 
 def compute_keep_intervals(

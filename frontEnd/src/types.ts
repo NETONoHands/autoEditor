@@ -1,7 +1,7 @@
 export type Orientation = 'vertical' | 'horizontal'
 export type EditingPace = 'natural' | 'fast' | 'jump-cut'
 export type SafeArea = 0 | 0.1 | 0.15
-export type Phase = 'input' | 'editing' | 'progress' | 'done'
+export type Phase = 'input' | 'crop-select' | 'editing' | 'progress' | 'done'
 export type FileState = 'idle' | 'loading' | 'ready'
 
 export type Metadata = {
@@ -48,6 +48,11 @@ export type RawCaption = { texto: string; start: number; end: number }
 export type RawCaptionsPayload = { legendas: RawCaption[] }
 
 export type RemoveInterval = { start: number; end: number }
+
+export type SuggestedCuts = {
+  silences: RemoveInterval[]
+  disfluencies: RemoveInterval[]
+}
 
 
 export type CutRequest = {

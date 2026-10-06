@@ -17,7 +17,9 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from analyzer import analyze_video
-from cutter import cut_by_removed_intervals
+from cutter import compute_auto_remove_intervals, cut_by_removed_intervals
+from disfluency_detector import detect_disfluencies
+from silence_detector import detect_silences
 from main import DEFAULT_LUT_PATH, run_pipeline
 from pipeline_contracts import (
     InputValidationError,
@@ -103,7 +105,7 @@ class RemovedInterval(BaseModel):
 
 
 class CutRequest(BaseModel):
-    remove_intervals: list[RemovedInterval] = Field(min_length=1)
+    remove_intervals: list[RemovedInterval] | None = None
 
 
 def _project_directory(project_id: str) -> Path:
@@ -390,6 +392,30 @@ def project_captions(project_id: str) -> dict[str, Any]:
     return {"project_id": project_id, "captions": load_captions_json(str(captions_path))}
 
 
+@app.get("/api/projects/{project_id}/suggested-cuts")
+def project_suggested_cuts(project_id: str) -> dict[str, Any]:
+    input_directory = _project_directory(project_id) / "input"
+    video_path = input_directory / "video.mp4"
+    captions_path = input_directory / "captions.json"
+    if not video_path.is_file() or not captions_path.is_file():
+        raise HTTPException(status_code=404, detail="Projeto não encontrado.")
+
+    captions = load_captions_json(str(captions_path))
+    try:
+        silences = detect_silences(str(video_path))
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="FFmpeg não encontrado.")
+    except RuntimeError as exc:
+        LOGGER.error("Falha ao detectar silêncios: %s", exc)
+        raise HTTPException(status_code=500, detail="Falha ao detectar silêncios.")
+
+    return {
+        "project_id": project_id,
+        "silences": silences,
+        "disfluencies": detect_disfluencies(captions),
+    }
+
+
 @app.post("/api/projects/{project_id}/cuts", status_code=status.HTTP_201_CREATED)
 def create_cut(project_id: str, request: CutRequest) -> dict[str, Any]:
     manifest = _read_manifest(project_id)
@@ -400,7 +426,16 @@ def create_cut(project_id: str, request: CutRequest) -> dict[str, Any]:
 
     total_duration = float(manifest["metadata"]["duration_seconds"])
     captions = load_captions_json(str(captions_path))
-    remove_intervals = [(interval.start, interval.end) for interval in request.remove_intervals]
+    if request.remove_intervals:
+        remove_intervals = [(interval.start, interval.end) for interval in request.remove_intervals]
+    else:
+        # Sem exclusões manuais: corte automático (silêncios de áudio + repetições).
+        remove_intervals = compute_auto_remove_intervals(str(video_path), captions, total_duration)
+        if not remove_intervals:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Nenhum silêncio ou repetição foi detectado.",
+            )
 
     cut_id = str(uuid.uuid4())
     cut_directory = project_directory / "cuts" / cut_id
