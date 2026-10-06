@@ -67,6 +67,10 @@ def run_pipeline(
     crop_y: Optional[int] = None,
     crop_w: Optional[int] = None,
     crop_h: Optional[int] = None,
+    content_crop_x: Optional[int] = None,
+    content_crop_y: Optional[int] = None,
+    content_crop_w: Optional[int] = None,
+    content_crop_h: Optional[int] = None,
 ) -> Dict[str, Any]:
     configure_logging()
 
@@ -165,6 +169,10 @@ def run_pipeline(
                 crop_y=crop_y,
                 crop_w=crop_w,
                 crop_h=crop_h,
+                content_crop_x=content_crop_x,
+                content_crop_y=content_crop_y,
+                content_crop_w=content_crop_w,
+                content_crop_h=content_crop_h,
             )
             published_captions_paths.append(os.path.basename(formatting_result["captions_json"]))
             treated_paths.append(treated_video_path)

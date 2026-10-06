@@ -106,22 +106,14 @@ def build_vertical_crop_filter(
     crop_h: Optional[int] = None,
     face_crop_x: Optional[int] = None,
 ) -> str:
-    if (
-        crop_x is not None
-        and crop_y is not None
-        and crop_w is not None
-        and crop_h is not None
-        and crop_w > 0
-        and crop_h > 0
-    ):
-        # Keep the full source height; use the selected camera box only to anchor the horizontal crop.
-        safe_x = max(0, int(crop_x))
-        crop_width = int(crop_w)
-        crop_x_expression = (
-            f"max(0\\,min(iw-ow\\,{safe_x}+{crop_width}/2-ow/2))"
+    if has_manual_crop(crop_x, crop_y, crop_w, crop_h):
+        return (
+            f"crop={int(crop_w)}:{int(crop_h)}:{max(0, int(crop_x))}:{max(0, int(crop_y))},"
+            "scale=1080:1920:force_original_aspect_ratio=decrease,"
+            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2"
         )
-        crop_filter = f"crop=min(ih*9/16\\,iw):ih:{crop_x_expression}:0"
-    elif face_crop_x is None:
+
+    if face_crop_x is None:
         crop_filter = build_center_crop_9x16_filter()
     else:
         crop_x_expression = f"max(0\\,min(iw-ow\\,{max(0, int(face_crop_x))}))"
@@ -195,9 +187,10 @@ def build_vertical_composite_filter(
     crop_h: Optional[int] = None,
     face_crop_x: Optional[int] = None,
 ) -> str:
+    if not 0.0 <= safe_area <= 0.2:
+        raise ValueError("safe_area must be between 0.0 and 0.2")
     filters = [
         build_vertical_crop_filter(crop_x, crop_y, crop_w, crop_h, face_crop_x),
-        build_vertical_safe_area_filter(safe_area),
     ]
     title_y, _ = _safe_text_margins(safe_area)
     if title.strip():
@@ -220,6 +213,51 @@ def build_vertical_composite_filter(
         subtitle_filter += f":fontsdir='{escape_path_for_ffmpeg_filter(subtitle_fonts_dir)}'"
     filters.append(subtitle_filter)
     return ",".join(filters)
+
+
+def has_split_screen_crops(
+    crop_x: Optional[int],
+    crop_y: Optional[int],
+    crop_w: Optional[int],
+    crop_h: Optional[int],
+    content_crop_x: Optional[int],
+    content_crop_y: Optional[int],
+    content_crop_w: Optional[int],
+    content_crop_h: Optional[int],
+) -> bool:
+    return has_manual_crop(crop_x, crop_y, crop_w, crop_h) and has_manual_crop(
+        content_crop_x, content_crop_y, content_crop_w, content_crop_h
+    )
+
+
+def build_split_screen_filter(
+    crop_x: int,
+    crop_y: int,
+    crop_w: int,
+    crop_h: int,
+    content_crop_x: int,
+    content_crop_y: int,
+    content_crop_w: int,
+    content_crop_h: int,
+    subtitle_path: str,
+) -> str:
+    """Monta o -filter_complex 1080x1920: câmera no topo, conteúdo colado embaixo, legenda por cima."""
+    escaped_subtitle_path = escape_path_for_ffmpeg_filter(subtitle_path)
+    subtitle_filter = f"ass='{escaped_subtitle_path}'"
+    if os.path.isdir(FONTS_DIR):
+        subtitle_filter += f":fontsdir='{escape_path_for_ffmpeg_filter(FONTS_DIR)}'"
+    return (
+        "[0:v]split=3[bg_orig][cam_orig][cont_orig];"
+        "[bg_orig]scale=1080:1920:force_original_aspect_ratio=increase,"
+        "crop=1080:1920,boxblur=20:20[bg];"
+        f"[cam_orig]crop={int(crop_w)}:{int(crop_h)}:{max(0, int(crop_x))}:{max(0, int(crop_y))},"
+        "scale=1080:-1[cam_scaled];"
+        f"[cont_orig]crop={int(content_crop_w)}:{int(content_crop_h)}:"
+        f"{max(0, int(content_crop_x))}:{max(0, int(content_crop_y))},scale=1080:-1[cont_scaled];"
+        "[bg][cont_scaled]overlay=0:1920-h[bg_with_cont];"
+        "[bg_with_cont][cam_scaled]overlay=0:0[composed];"
+        f"[composed]{subtitle_filter}[vid_out]"
+    )
 
 
 def build_srt_from_captions(
@@ -277,6 +315,10 @@ def format_video_by_classification(
     crop_y: Optional[int] = None,
     crop_w: Optional[int] = None,
     crop_h: Optional[int] = None,
+    content_crop_x: Optional[int] = None,
+    content_crop_y: Optional[int] = None,
+    content_crop_w: Optional[int] = None,
+    content_crop_h: Optional[int] = None,
 ) -> Dict[str, str]:
     configure_logging()
 
@@ -317,6 +359,16 @@ def format_video_by_classification(
         crop_h=crop_h,
         face_crop_x=face_crop_x,
     )
+    split_screen_filter = None
+    if has_split_screen_crops(
+        crop_x, crop_y, crop_w, crop_h,
+        content_crop_x, content_crop_y, content_crop_w, content_crop_h,
+    ):
+        split_screen_filter = build_split_screen_filter(
+            crop_x, crop_y, crop_w, crop_h,
+            content_crop_x, content_crop_y, content_crop_w, content_crop_h,
+            captions_ass_path,
+        )
     return _render_classified_outputs(
         resolved_video_path,
         vertical_filter,
@@ -325,6 +377,7 @@ def format_video_by_classification(
         output_stem,
         captions_json_path,
         captions_ass_path,
+        split_screen_filter,
     )
 
 
@@ -336,7 +389,13 @@ def _render_classified_outputs(
     output_stem: str,
     captions_json_path: str,
     captions_ass_path: str,
+    split_screen_filter: Optional[str] = None,
 ) -> Dict[str, str]:
+    # Com os dois recortes definidos usa -filter_complex; senão mantém o -vf anterior.
+    if split_screen_filter:
+        vertical_video_args = ["-filter_complex", split_screen_filter, "-map", "[vid_out]"]
+    else:
+        vertical_video_args = ["-map", "0:v:0", "-vf", vertical_filter]
 
     if normalized_classification == "short":
         final_vertical_legendado = os.path.join(
@@ -347,19 +406,15 @@ def _render_classified_outputs(
             resolved_output_directory,
             f"{output_stem}-horizontal-legendado.mp4",
         )
-        video_filter = vertical_filter
 
         short_command = [
             "ffmpeg",
             "-y",
             "-i",
             resolved_video_path,
-            "-map",
-            "0:v:0",
+            *vertical_video_args,
             "-map",
             "0:a:0?",
-            "-vf",
-            video_filter,
             "-c:v",
             "h264_nvenc",
             "-rc",
@@ -442,12 +497,9 @@ def _render_classified_outputs(
         "-y",
         "-i",
         resolved_video_path,
-        "-map",
-        "0:v:0",
+        *vertical_video_args,
         "-map",
         "0:a:0?",
-        "-vf",
-        vertical_filter,
         "-c:v",
         "h264_nvenc",
         "-rc",

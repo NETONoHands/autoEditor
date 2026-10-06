@@ -6,6 +6,8 @@
 .crop-selector-image.is-dragging{cursor:crosshair}
 .crop-selector-vertical-frame{position:absolute;top:0;bottom:0;border-right:2px solid var(--acid);border-left:2px solid var(--acid);box-shadow:0 0 0 100vmax rgb(0 0 0 / 38%);pointer-events:none}
 .crop-selector-rectangle{position:absolute;z-index:1;border:2px solid var(--red);background:rgb(228 93 69 / 16%);pointer-events:none}
+.crop-selector-rectangle.is-content{border-color:#3b82f6;background:rgb(59 130 246 / 18%)}
+.crop-selector-image.is-drawing{cursor:crosshair}
 .crop-selector-actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}
 .crop-selector-actions .primary-button,.crop-selector-actions .secondary-button{width:auto;max-width:none;margin-top:0}
 .crop-selector-actions .secondary-button{padding:16px 20px}

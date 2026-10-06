@@ -5,11 +5,13 @@ import './CropSelector.css'
 
 type Crop = { x: number; y: number; w: number; h: number }
 type Point = { x: number; y: number }
+type Selection = { start: Point; end: Point }
+type Step = 'camera' | 'content' | 'review'
 
 type CropSelectorProps = {
   projectId: string
   metadata: Metadata
-  onCropComplete: (crop: Crop) => void
+  onCropComplete: (camCrop: Crop, contentCrop: Crop) => void
 }
 
 function parseResolution(resolution: string): { width: number; height: number } | null {
@@ -24,7 +26,10 @@ function parseResolution(resolution: string): { width: number; height: number } 
 function CropSelector({ projectId, metadata, onCropComplete }: CropSelectorProps) {
   const imageRef = useRef<HTMLImageElement>(null)
   const dragStartRef = useRef<Point | null>(null)
-  const [selection, setSelection] = useState<{ start: Point; end: Point } | null>(null)
+  const [step, setStep] = useState<Step>('camera')
+  const [selection, setSelection] = useState<Selection | null>(null)
+  const [camCrop, setCamCrop] = useState<Selection | null>(null)
+  const [contentCrop, setContentCrop] = useState<Selection | null>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [imageError, setImageError] = useState(false)
   const resolution = parseResolution(metadata.resolution_label)
@@ -50,10 +55,25 @@ function CropSelector({ projectId, metadata, onCropComplete }: CropSelectorProps
   }, [getPoint])
 
   const finishSelection = useCallback((clientX: number, clientY: number) => {
-    updateSelection(clientX, clientY)
+    const start = dragStartRef.current
+    const end = getPoint(clientX, clientY)
     dragStartRef.current = null
     setIsDragging(false)
-  }, [updateSelection])
+    if (!start || !end) return
+    setSelection({ start, end })
+    if (Math.abs(end.x - start.x) < 0.005 || Math.abs(end.y - start.y) < 0.005) return
+
+    const finished = { start, end }
+    if (step === 'camera') {
+      setCamCrop(finished)
+      setSelection(null)
+      setStep('content')
+    } else if (step === 'content') {
+      setContentCrop(finished)
+      setSelection(null)
+      setStep('review')
+    }
+  }, [getPoint, step])
 
   useEffect(() => {
     if (!isDragging) return
@@ -70,7 +90,7 @@ function CropSelector({ projectId, metadata, onCropComplete }: CropSelectorProps
   }, [finishSelection, isDragging, updateSelection])
 
   function handleMouseDown(event: React.MouseEvent<HTMLImageElement>) {
-    if (event.button !== 0 || !resolution || imageError) return
+    if (event.button !== 0 || !resolution || imageError || step === 'review') return
     event.preventDefault()
     const point = getPoint(event.clientX, event.clientY)
     if (!point) return
@@ -80,44 +100,48 @@ function CropSelector({ projectId, metadata, onCropComplete }: CropSelectorProps
     setIsDragging(true)
   }
 
+  function toPixels(area: Selection, size: { width: number; height: number }): Crop {
+    const left = Math.min(area.start.x, area.end.x)
+    const top = Math.min(area.start.y, area.end.y)
+    const right = Math.max(area.start.x, area.end.x)
+    const bottom = Math.max(area.start.y, area.end.y)
+    const x = Math.min(size.width - 1, Math.floor(left * size.width))
+    const y = Math.min(size.height - 1, Math.floor(top * size.height))
+    const rightEdge = Math.min(size.width, Math.ceil(right * size.width))
+    const bottomEdge = Math.min(size.height, Math.ceil(bottom * size.height))
+    return { x, y, w: Math.max(1, rightEdge - x), h: Math.max(1, bottomEdge - y) }
+  }
+
   function handleConfirm() {
-    if (!selection || !resolution) return
-
-    const left = Math.min(selection.start.x, selection.end.x)
-    const top = Math.min(selection.start.y, selection.end.y)
-    const right = Math.max(selection.start.x, selection.end.x)
-    const bottom = Math.max(selection.start.y, selection.end.y)
-    const x = Math.min(resolution.width - 1, Math.floor(left * resolution.width))
-    const y = Math.min(resolution.height - 1, Math.floor(top * resolution.height))
-    const rightEdge = Math.min(resolution.width, Math.ceil(right * resolution.width))
-    const bottomEdge = Math.min(resolution.height, Math.ceil(bottom * resolution.height))
-
-    onCropComplete({
-      x,
-      y,
-      w: Math.max(1, rightEdge - x),
-      h: Math.max(1, bottomEdge - y),
-    })
+    if (!camCrop || !contentCrop || !resolution) return
+    onCropComplete(toPixels(camCrop, resolution), toPixels(contentCrop, resolution))
   }
 
   function handleReset() {
     dragStartRef.current = null
     setIsDragging(false)
     setSelection(null)
+    setCamCrop(null)
+    setContentCrop(null)
+    setStep('camera')
   }
 
-  const rectangle = selection
-    ? {
-        left: Math.min(selection.start.x, selection.end.x) * 100,
-        top: Math.min(selection.start.y, selection.end.y) * 100,
-        width: Math.abs(selection.end.x - selection.start.x) * 100,
-        height: Math.abs(selection.end.y - selection.start.y) * 100,
-      }
-    : null
-  const verticalFrame = selection && resolution
+  function toRectangle(area: Selection | null) {
+    return area
+      ? {
+          left: Math.min(area.start.x, area.end.x) * 100,
+          top: Math.min(area.start.y, area.end.y) * 100,
+          width: Math.abs(area.end.x - area.start.x) * 100,
+          height: Math.abs(area.end.y - area.start.y) * 100,
+        }
+      : null
+  }
+
+  const frameSource = step === 'camera' ? selection : camCrop
+  const verticalFrame = frameSource && resolution
     ? (() => {
         const frameWidth = Math.min(resolution.height * 9 / 16, resolution.width)
-        const selectedCenter = ((selection.start.x + selection.end.x) / 2) * resolution.width
+        const selectedCenter = ((frameSource.start.x + frameSource.end.x) / 2) * resolution.width
         const frameX = Math.min(
           Math.max(selectedCenter - frameWidth / 2, 0),
           resolution.width - frameWidth,
@@ -125,12 +149,20 @@ function CropSelector({ projectId, metadata, onCropComplete }: CropSelectorProps
         return { left: frameX / resolution.width * 100, width: frameWidth / resolution.width * 100 }
       })()
     : null
-  const hasArea = Boolean(selection && selection.start.x !== selection.end.x && selection.start.y !== selection.end.y)
+  const rectangles = [
+    { key: 'camera', className: 'is-camera', area: step === 'camera' ? selection : camCrop },
+    { key: 'content', className: 'is-content', area: step === 'content' ? selection : contentCrop },
+  ].map((item) => ({ ...item, rect: toRectangle(item.area) }))
+  const instruction = step === 'camera'
+    ? 'Desenhe o recorte da Câmera'
+    : step === 'content'
+      ? 'Desenhe o recorte do Conteúdo (Gameplay/Tela)'
+      : 'Confira os dois enquadramentos e confirme.'
 
   return (
     <section className="crop-selector" aria-label="Seleção do recorte da câmera">
       <p className="crop-selector-hint">
-        Marque a câmera. O quadro vertical usa toda a altura do vídeo e mantém o conteúdo acima e abaixo dela.
+        <strong>Passo {step === 'camera' ? 1 : step === 'content' ? 2 : 3} de 3 — {instruction}</strong>
       </p>
       {!resolution && (
         <p className="crop-selector-error" role="alert">
@@ -142,7 +174,7 @@ function CropSelector({ projectId, metadata, onCropComplete }: CropSelectorProps
           Não foi possível carregar a thumbnail do vídeo.
         </p>
       )}
-      <div className={`crop-selector-image ${isDragging ? 'is-dragging' : ''}`}>
+      <div className={`crop-selector-image ${step === 'review' ? '' : 'is-drawing'} ${isDragging ? 'is-dragging' : ''}`}>
         <img
           ref={imageRef}
           src={thumbnailUrl}
@@ -165,25 +197,21 @@ function CropSelector({ projectId, metadata, onCropComplete }: CropSelectorProps
             style={{ left: `${verticalFrame.left}%`, width: `${verticalFrame.width}%` }}
           />
         )}
-        {rectangle && (
+        {rectangles.map(({ key, className, rect }) => rect && (
           <div
-            className="crop-selector-rectangle"
+            key={key}
+            className={`crop-selector-rectangle ${className}`}
             aria-hidden="true"
-            style={{
-              left: `${rectangle.left}%`,
-              top: `${rectangle.top}%`,
-              width: `${rectangle.width}%`,
-              height: `${rectangle.height}%`,
-            }}
+            style={{ left: `${rect.left}%`, top: `${rect.top}%`, width: `${rect.width}%`, height: `${rect.height}%` }}
           />
-        )}
+        ))}
       </div>
       <div className="crop-selector-actions">
-        <button type="button" className="primary-button" disabled={!hasArea || !resolution} onClick={handleConfirm}>
-          Confirmar Enquadramento da Câmera
+        <button type="button" className="primary-button" disabled={step !== 'review' || !resolution} onClick={handleConfirm}>
+          Confirmar Enquadramentos
         </button>
-        <button type="button" className="secondary-button" disabled={!selection} onClick={handleReset}>
-          Resetar Seleção
+        <button type="button" className="secondary-button" disabled={step === 'camera' && !selection} onClick={handleReset}>
+          Recomeçar
         </button>
       </div>
     </section>

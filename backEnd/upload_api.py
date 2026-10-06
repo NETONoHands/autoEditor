@@ -9,7 +9,7 @@ import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -97,6 +97,10 @@ class EditRequest(BaseModel):
     crop_y: int | None = None
     crop_w: int | None = None
     crop_h: int | None = None
+    content_crop_x: Optional[int] = None
+    content_crop_y: Optional[int] = None
+    content_crop_w: Optional[int] = None
+    content_crop_h: Optional[int] = None
 
 
 class RemovedInterval(BaseModel):
@@ -209,6 +213,10 @@ def _run_edit(project_id: str, edit_id: str, request: EditRequest) -> None:
             crop_y=request.crop_y,
             crop_w=request.crop_w,
             crop_h=request.crop_h,
+            content_crop_x=request.content_crop_x,
+            content_crop_y=request.content_crop_y,
+            content_crop_w=request.content_crop_w,
+            content_crop_h=request.content_crop_h,
         )
         files = [
             {"output_id": path.name, "filename": path.name, "size_bytes": path.stat().st_size}

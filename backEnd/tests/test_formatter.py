@@ -72,8 +72,7 @@ def test_manual_crop_skips_face_tracker(monkeypatch, tmp_path) -> None:
     )
 
     assert (
-        "crop=min(ih*9/16\\,iw):ih:"
-        "max(0\\,min(iw-ow\\,10+300/2-ow/2)):0,"
+        "crop=300:400:10:20,"
         "scale=1080:1920:force_original_aspect_ratio=decrease,"
         "pad=1080:1920:(ow-iw)/2:(oh-ih)/2"
     ) in result
@@ -81,21 +80,18 @@ def test_manual_crop_skips_face_tracker(monkeypatch, tmp_path) -> None:
     assert not formatter.has_manual_crop(10, None, 300, 400)
 
 
-def test_manual_crop_uses_selection_as_horizontal_anchor_only() -> None:
+def test_manual_crop_is_applied_absolutely() -> None:
     first = formatter.build_vertical_crop_filter(100, 20, 300, 400)
     second = formatter.build_vertical_crop_filter(100, 300, 300, 100)
 
-    assert first == second
-    assert "crop=min(ih*9/16\\,iw):ih:" in first
-    assert "100+300/2-ow/2" in first
+    assert first.startswith("crop=300:400:100:20,")
+    assert second.startswith("crop=300:100:100:300,")
 
 
-def test_manual_crop_anchor_is_clamped_at_both_horizontal_edges() -> None:
-    left = formatter.build_vertical_crop_filter(0, 20, 300, 400)
-    right = formatter.build_vertical_crop_filter(1150, 20, 120, 400)
+def test_manual_crop_clamps_negative_origin() -> None:
+    result = formatter.build_vertical_crop_filter(-5, -7, 300, 400)
 
-    assert "max(0\\,min(iw-ow\\,0+300/2-ow/2))" in left
-    assert "max(0\\,min(iw-ow\\,1150+120/2-ow/2))" in right
+    assert result.startswith("crop=300:400:0:0,")
 
 
 def test_vertical_filter_adds_safe_area_margin() -> None:

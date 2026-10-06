@@ -38,6 +38,10 @@ export type EditConfig = {
   crop_y?: number | null
   crop_w?: number | null
   crop_h?: number | null
+  content_crop_x?: number | null
+  content_crop_y?: number | null
+  content_crop_w?: number | null
+  content_crop_h?: number | null
 }
 
 /** Uma palavra transcrita com seus tempos absolutos (segundos decimais). */

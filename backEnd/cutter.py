@@ -255,16 +255,37 @@ def cut_from_whisper_json(
     silence_threshold: float = DEFAULT_SILENCE_THRESHOLD,
 ) -> Dict[str, Any]:
     configure_logging()
-
     transcription_data = load_whisper_json(json_path)
-    intervals = extract_speech_intervals(transcription_data, silence_threshold=silence_threshold)
-    resolved_output_path = cut_video_with_ffmpeg(video_path, intervals, output_path=output_path)
+    captions = transcription_data.get("words") or [
+        word
+        for segment in transcription_data.get("segments", [])
+        for word in segment.get("words", [])
+    ]
 
-    return {
-        "intervals": intervals,
-        "preserved_intervals": serialize_intervals(intervals),
-        "output_path": resolved_output_path,
-    }
+    # Pega a duração total baseada na última palavra detectada
+    total_duration = 10000.0
+    if captions and "end" in captions[-1]:
+        total_duration = float(captions[-1]["end"]) + 10.0
+
+    # Chama a nova inteligência híbrida
+    remove_intervals = compute_auto_remove_intervals(
+        video_path=video_path,
+        captions=captions,
+        total_duration=total_duration,
+        silence_duration=silence_threshold,
+    )
+
+    # Se não houver silêncio ou gaguejada para remover, encerra cedo
+    if not remove_intervals:
+        LOGGER.info("Nenhum corte automático necessário.")
+        return {"intervals": [], "preserved_intervals": [], "output_path": video_path}
+
+    return cut_by_removed_intervals(
+        video_path=video_path,
+        remove_intervals=remove_intervals,
+        total_duration=total_duration,
+        output_path=output_path,
+    )
 
 
 DEFAULT_MERGE_GAP = 0.15
