@@ -3,10 +3,10 @@ import json
 import logging
 import os
 import subprocess
-import tempfile
 from typing import Any, Dict, List, Optional
 
 from face_tracker import detect_face_crop_x
+from json_to_ass import convert_json_to_ass
 from pipeline_contracts import normalize_captions_payload, serialize_captions
 from segmentation import SubtitleCue, _format_timestamp
 
@@ -83,10 +83,25 @@ def build_center_crop_9x16_filter() -> str:
     return "crop=ih*9/16:ih:(iw-ow)/2:0"
 
 
-def build_vertical_crop_filter(crop_x: Optional[int] = None) -> str:
-    if crop_x is None:
+def build_vertical_crop_filter(
+    crop_x: Optional[int] = None,
+    crop_y: Optional[int] = None,
+    crop_w: Optional[int] = None,
+    crop_h: Optional[int] = None,
+    face_crop_x: Optional[int] = None,
+) -> str:
+    # Garante explicitamente que todos foram enviados e são válidos
+    if crop_x is not None and crop_y is not None and crop_w is not None and crop_h is not None:
+        if crop_w > 0 and crop_h > 0:
+            safe_x = max(0, int(crop_x))
+            safe_y = max(0, int(crop_y))
+            return f"crop={int(crop_w)}:{int(crop_h)}:{safe_x}:{safe_y}"
+
+    # Fallback se faltou algum parâmetro ou se a área for inválida
+    if face_crop_x is None:
         return build_center_crop_9x16_filter()
-    return f"crop=ih*9/16:ih:{max(0, int(crop_x))}:0"
+        
+    return f"crop=ih*9/16:ih:{max(0, int(face_crop_x))}:0"
 
 
 def build_vertical_safe_area_filter(safe_area: float) -> str:
@@ -145,10 +160,16 @@ def build_vertical_composite_filter(
     title: str = "",
     crop_x: Optional[int] = None,
     safe_area: float = 0.0,
+    crop_y: Optional[int] = None,
+    crop_w: Optional[int] = None,
+    crop_h: Optional[int] = None,
+    face_crop_x: Optional[int] = None,
 ) -> str:
-    filters = [build_vertical_crop_filter(crop_x), build_vertical_safe_area_filter(safe_area)]
-    title_y, subtitle_margin_v = _safe_text_margins(safe_area)
-    subtitle_margin_h = int(round(1080 * safe_area))
+    filters = [
+        build_vertical_crop_filter(crop_x, crop_y, crop_w, crop_h, face_crop_x),
+        build_vertical_safe_area_filter(safe_area),
+    ]
+    title_y, _ = _safe_text_margins(safe_area)
     if title.strip():
         fontfile = resolve_title_fontfile()
         if fontfile is None:
@@ -163,16 +184,11 @@ def build_vertical_composite_filter(
                 f"borderw=3:bordercolor=black:x=(w-text_w)/2:y={title_y}:"
                 "enable='between(t,0,5)':alpha='if(lt(t,4),1,5-t)'"
             )
-    subtitle_family, subtitle_fonts_dir = resolve_subtitle_font()
-    subtitle_filter_parts = [f"subtitles=filename='{escape_path_for_ffmpeg_filter(subtitle_path)}'"]
+    subtitle_filter = f"ass=filename='{escape_path_for_ffmpeg_filter(subtitle_path)}'"
+    subtitle_fonts_dir = FONTS_DIR if os.path.isdir(FONTS_DIR) else None
     if subtitle_fonts_dir:
-        subtitle_filter_parts.append(f"fontsdir='{escape_path_for_ffmpeg_filter(subtitle_fonts_dir)}'")
-    subtitle_filter_parts.append(
-        f"force_style='FontName={subtitle_family},FontSize=10,PrimaryColour=&H00FFFFFF,"
-        "OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=1,"
-        f"Alignment=2,MarginL={subtitle_margin_h},MarginR={subtitle_margin_h},MarginV={subtitle_margin_v}'"
-    )
-    filters.append(":".join(subtitle_filter_parts))
+        subtitle_filter += f":fontsdir='{escape_path_for_ffmpeg_filter(subtitle_fonts_dir)}'"
+    filters.append(subtitle_filter)
     return ",".join(filters)
 
 
@@ -227,6 +243,10 @@ def format_video_by_classification(
     title: str = "",
     face_tracking: bool = True,
     safe_area: float = 0.0,
+    crop_x: Optional[int] = None,
+    crop_y: Optional[int] = None,
+    crop_w: Optional[int] = None,
+    crop_h: Optional[int] = None,
 ) -> Dict[str, str]:
     configure_logging()
 
@@ -244,31 +264,38 @@ def format_video_by_classification(
     with open(captions_json_path, "w", encoding="utf-8") as captions_file:
         json.dump(captions, captions_file, ensure_ascii=False, indent=2)
     LOGGER.info("Saved captions JSON to %s", captions_json_path)
+    _, subtitle_margin_v = _safe_text_margins(safe_area)
+    subtitle_margin_h = int(round(1080 * safe_area))
+    captions_ass_path = convert_json_to_ass(
+        captions_json_path,
+        os.path.join(resolved_output_directory, f"{output_stem}.ass"),
+        margin_h=subtitle_margin_h,
+        margin_v=subtitle_margin_v,
+    )
 
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".srt", delete=False, encoding="utf-8", dir=resolved_output_directory
-    ) as temp_srt_file:
-        temp_srt_file.write(build_srt_from_captions(captions))
-        temp_subtitle_path = temp_srt_file.name
-
-    try:
-        crop_x = resolve_vertical_crop_x(resolved_video_path, face_tracking)
-        vertical_filter = build_vertical_composite_filter(
-            temp_subtitle_path,
-            title=title,
-            crop_x=crop_x,
-            safe_area=safe_area,
-        )
-        return _render_classified_outputs(
-            resolved_video_path,
-            vertical_filter,
-            normalized_classification,
-            resolved_output_directory,
-            output_stem,
-            captions_json_path,
-        )
-    finally:
-        os.remove(temp_subtitle_path)
+    # Crop manual completo dispensa o face_tracker.
+    face_crop_x = None
+    if not has_manual_crop(crop_x, crop_y, crop_w, crop_h):
+        face_crop_x = resolve_vertical_crop_x(resolved_video_path, face_tracking)
+    vertical_filter = build_vertical_composite_filter(
+        captions_ass_path,
+        title=title,
+        crop_x=crop_x,
+        safe_area=safe_area,
+        crop_y=crop_y,
+        crop_w=crop_w,
+        crop_h=crop_h,
+        face_crop_x=face_crop_x,
+    )
+    return _render_classified_outputs(
+        resolved_video_path,
+        vertical_filter,
+        normalized_classification,
+        resolved_output_directory,
+        output_stem,
+        captions_json_path,
+        captions_ass_path,
+    )
 
 
 def _render_classified_outputs(
@@ -278,6 +305,7 @@ def _render_classified_outputs(
     resolved_output_directory: str,
     output_stem: str,
     captions_json_path: str,
+    captions_ass_path: str,
 ) -> Dict[str, str]:
 
     if normalized_classification == "short":
@@ -354,6 +382,7 @@ def _render_classified_outputs(
             "final_vertical_legendado": final_vertical_legendado,
             "final_horizontal_legendado": final_horizontal_legendado,
             "captions_json": captions_json_path,
+            "captions_ass": captions_ass_path,
         }
 
     final_horizontal = os.path.join(resolved_output_directory, f"{output_stem}-horizontal.mp4")
@@ -412,6 +441,7 @@ def _render_classified_outputs(
         "final_horizontal": final_horizontal,
         "final_vertical": final_vertical,
         "captions_json": captions_json_path,
+        "captions_ass": captions_ass_path,
     }
 
 

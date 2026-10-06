@@ -45,61 +45,67 @@ def apply_subtitles_with_ffmpeg(
     video_path: str,
     subtitle_path: str,
     output_path: Optional[str] = None,
-    encoder: str = "h264_nvenc",
-    bitrate: Optional[str] = "10M",
+    video_bitrate: str = "10M",
 ) -> str:
     configure_logging()
 
     resolved_video_path = validate_input_file(video_path, "Input video")
-    resolved_subtitle_path = validate_input_file(subtitle_path, "Subtitle SRT")
+    resolved_subtitle_path = validate_input_file(subtitle_path, "Subtitle ASS")
     project_root = os.path.abspath(os.getcwd())
     output_directory = ensure_output_directory(project_root)
 
     resolved_output_path = os.path.abspath(
         output_path or os.path.join(output_directory, "final_legendado.mp4")
     )
-    os.makedirs(os.path.dirname(resolved_output_path) or output_directory, exist_ok=True)
+    os.makedirs(os.path.dirname(resolved_output_path), exist_ok=True)
 
-    subtitle_filter = f"ass=filename='{escape_path_for_ffmpeg_filter(resolved_subtitle_path)}'"
+    if not resolved_subtitle_path.lower().endswith(".ass"):
+        LOGGER.warning("Atenção: O arquivo passado não é um .ass! (%s)", resolved_subtitle_path)
 
-    def build_command(video_encoder: str) -> list[str]:
-        command = [
-            "ffmpeg",
-            "-y",
-            "-i",
-            resolved_video_path,
-            "-vf",
-            subtitle_filter,
-            "-c:v",
-            video_encoder,
-        ]
-        if video_encoder == "h264_nvenc":
-            command.extend(["-rc", "cbr"])
-        if bitrate is not None:
-            command.extend(
-                [
-                    "-b:v",
-                    bitrate,
-                    "-minrate",
-                    bitrate,
-                    "-maxrate",
-                    bitrate,
-                    "-bufsize",
-                    "20M",
-                ]
-            )
-        command.extend(["-c:a", "copy", resolved_output_path])
-        return command
+    ass_filter = f"ass='{escape_path_for_ffmpeg_filter(resolved_subtitle_path)}'"
+    base_command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        resolved_video_path,
+        "-vf",
+        ass_filter,
+        "-c:a",
+        "copy",
+    ]
+    gpu_command = base_command + [
+        "-c:v",
+        "h264_nvenc",
+        "-rc",
+        "cbr",
+        "-b:v",
+        video_bitrate,
+        "-minrate",
+        video_bitrate,
+        "-maxrate",
+        video_bitrate,
+        "-bufsize",
+        "20M",
+        resolved_output_path,
+    ]
+    cpu_command = base_command + [
+        "-c:v",
+        "libx264",
+        "-b:v",
+        video_bitrate,
+        "-preset",
+        "fast",
+        resolved_output_path,
+    ]
 
-    command = build_command(encoder)
-    LOGGER.info("Running FFmpeg command: %s", " ".join(command))
     try:
-        subprocess.run(command, check=True)
+        LOGGER.info("Tentando renderizar com aceleração de GPU (NVENC)...")
+        LOGGER.info("Running FFmpeg command: %s", " ".join(gpu_command))
+        subprocess.run(gpu_command, check=True)
     except subprocess.CalledProcessError:
-        LOGGER.warning("FFmpeg rendering failed with %s; retrying with libx264", encoder)
-        fallback_command = build_command("libx264")
-        LOGGER.info("Running FFmpeg fallback command: %s", " ".join(fallback_command))
-        subprocess.run(fallback_command, check=True)
+        LOGGER.warning("Falha na GPU. Iniciando fallback seguro para CPU (libx264)...")
+        LOGGER.info("Running FFmpeg fallback command: %s", " ".join(cpu_command))
+        subprocess.run(cpu_command, check=True)
 
     if not os.path.isfile(resolved_output_path):
         raise RuntimeError(f"Subtitled video was not created: {resolved_output_path}")
@@ -113,7 +119,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         description="Burn subtitles into a video and output final_legendado.mp4.",
     )
     parser.add_argument("video", help="Path to the input video")
-    parser.add_argument("srt", help="Path to the SRT subtitle file")
+    parser.add_argument("ass", help="Path to the ASS subtitle file")
     parser.add_argument(
         "--output",
         default=None,
@@ -131,7 +137,7 @@ def main() -> int:
     try:
         apply_subtitles_with_ffmpeg(
             args.video,
-            args.srt,
+            args.ass,
             output_path=args.output,
         )
     except Exception as exc:

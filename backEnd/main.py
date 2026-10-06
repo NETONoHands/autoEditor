@@ -58,6 +58,10 @@ def run_pipeline(
     face_tracking: bool = True,
     display_title: str = "",
     safe_area: float = 0.0,
+    crop_x: Optional[int] = None,
+    crop_y: Optional[int] = None,
+    crop_w: Optional[int] = None,
+    crop_h: Optional[int] = None,
 ) -> Dict[str, Any]:
     configure_logging()
 
@@ -146,6 +150,10 @@ def run_pipeline(
                 title=display_title,
                 face_tracking=face_tracking,
                 safe_area=safe_area,
+                crop_x=crop_x,
+                crop_y=crop_y,
+                crop_w=crop_w,
+                crop_h=crop_h,
             )
             published_captions_paths.append(os.path.basename(formatting_result["captions_json"]))
             treated_paths.append(treated_video_path)

@@ -15,16 +15,16 @@ PLAY_RES_Y = 1920
 WHITE = "&HFFFFFF&"
 YELLOW = "&H00FFFF&"
 
-ASS_HEADER = f"""[Script Info]
+ASS_HEADER = """[Script Info]
 ScriptType: v4.00+
-PlayResX: {PLAY_RES_X}
-PlayResY: {PLAY_RES_Y}
+PlayResX: {play_res_x}
+PlayResY: {play_res_y}
 WrapStyle: 2
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,90,{WHITE},{WHITE},&H00000000&,&H80000000&,-1,0,0,0,100,100,0,0,1,6,2,2,60,60,300,1
+Style: Default,Arial,90,{white},{white},&H00000000&,&H80000000&,-1,0,0,0,100,100,0,0,1,6,2,2,{margin_h},{margin_h},{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -113,11 +113,27 @@ def build_group_events(group: List[Dict]) -> List[str]:
     return events
 
 
-def convert_json_to_ass(json_path: str, ass_path: str) -> str:
+def convert_json_to_ass(
+    json_path: str,
+    ass_path: str,
+    margin_h: int = 60,
+    margin_v: int = 300,
+) -> str:
+    if margin_h < 0 or margin_v < 0:
+        raise ValueError("Subtitle margins must be non-negative")
+
     words = load_words(json_path)
     groups = group_words(words)
 
-    lines = [ASS_HEADER.rstrip("\n")]
+    lines = [
+        ASS_HEADER.format(
+            play_res_x=PLAY_RES_X,
+            play_res_y=PLAY_RES_Y,
+            white=WHITE,
+            margin_h=margin_h,
+            margin_v=margin_v,
+        ).rstrip("\n")
+    ]
     for group in groups:
         lines.extend(build_group_events(group))
 

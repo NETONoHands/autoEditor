@@ -4,7 +4,7 @@ import formatter
 
 
 def test_vertical_filter_uses_central_crop_and_reserved_title_subtitle_areas() -> None:
-    result = formatter.build_vertical_composite_filter("C:/legenda.srt", "Minha edição")
+    result = formatter.build_vertical_composite_filter("C:/legenda.ass", "Minha edição")
 
     assert "crop=ih*9/16:ih:(iw-ow)/2:0" in result
     assert "scale=1080:1920" in result
@@ -14,16 +14,15 @@ def test_vertical_filter_uses_central_crop_and_reserved_title_subtitle_areas() -
     assert "x=(w-text_w)/2:y=80" in result
     assert "enable='between(t,0,5)'" in result
     assert "alpha='if(lt(t,4),1,5-t)'" in result
-    assert "MarginV=120" in result
-    assert result.index("drawtext") < result.index("subtitles")
+    assert "ass=filename='C\\:/legenda.ass'" in result
+    assert result.index("drawtext") < result.index("ass=")
 
 
 def test_vertical_filter_uses_bundled_title_and_subtitle_fonts() -> None:
-    result = formatter.build_vertical_composite_filter("C:/legenda.srt", "Minha edição")
+    result = formatter.build_vertical_composite_filter("C:/legenda.ass", "Minha edição")
 
     assert "Anton-Regular.ttf" in result
     assert "fontsdir=" in result
-    assert "FontName=Sansation" in result
 
 
 def test_resolve_title_fontfile_prefers_env_override(monkeypatch, tmp_path: Path) -> None:
@@ -44,26 +43,40 @@ def test_resolve_subtitle_font_falls_back_through_bundled_fonts(monkeypatch) -> 
 
 
 def test_vertical_filter_escapes_title_text() -> None:
-    result = formatter.build_vertical_composite_filter("C:/legenda.srt", "Título: 100%")
+    result = formatter.build_vertical_composite_filter("C:/legenda.ass", "Título: 100%")
 
     assert "T\u00edtulo\\: 100%%" in result
 
 
 def test_vertical_filter_can_omit_visual_title() -> None:
-    result = formatter.build_vertical_composite_filter("C:/legenda.srt", "")
+    result = formatter.build_vertical_composite_filter("C:/legenda.ass", "")
 
     assert "drawtext" not in result
 
 
 def test_vertical_crop_can_use_face_position() -> None:
-    result = formatter.build_vertical_composite_filter("C:/legenda.srt", "Título", crop_x=321)
+    result = formatter.build_vertical_composite_filter("C:/legenda.ass", "Título", face_crop_x=321)
 
     assert "crop=ih*9/16:ih:321:0" in result
 
 
+def test_manual_crop_skips_face_tracker(monkeypatch, tmp_path) -> None:
+    def fail(*args, **kwargs):
+        raise AssertionError("face_tracker must not be called")
+
+    monkeypatch.setattr(formatter, "detect_face_crop_x", fail)
+    result = formatter.build_vertical_composite_filter(
+        "C:/legenda.ass", "", crop_x=10, crop_y=20, crop_w=300, crop_h=400
+    )
+
+    assert "crop=300:400:10:20,scale=1080:1920" in result
+    assert formatter.has_manual_crop(10, 20, 300, 400)
+    assert not formatter.has_manual_crop(10, None, 300, 400)
+
+
 def test_vertical_filter_adds_safe_area_margin() -> None:
     result = formatter.build_vertical_composite_filter(
-        "C:/legenda.srt",
+        "C:/legenda.ass",
         "Título",
         safe_area=0.1,
     )
@@ -72,12 +85,12 @@ def test_vertical_filter_adds_safe_area_margin() -> None:
     assert "scale=864:1536" not in result
     assert "pad=1080:1920" not in result
     assert "y=192" in result
-    assert "MarginL=108,MarginR=108,MarginV=192" in result
+    assert "ass=filename='C\\:/legenda.ass'" in result
 
 
 def test_vertical_filter_rejects_invalid_safe_area() -> None:
     try:
-        formatter.build_vertical_composite_filter("C:/legenda.srt", safe_area=0.25)
+        formatter.build_vertical_composite_filter("C:/legenda.ass", safe_area=0.25)
     except ValueError as exc:
         assert "safe_area" in str(exc)
     else:
@@ -119,3 +132,29 @@ def test_build_srt_from_captions_preserves_millisecond_precision() -> None:
     assert "00:00:00,000 --> 00:00:01,234" in result
     assert "Ola mundo" in result
 
+
+def test_formatter_renders_vertical_outputs_from_generated_ass(monkeypatch, tmp_path: Path) -> None:
+    video_path = tmp_path / "treated.mp4"
+    video_path.write_bytes(b"video")
+    commands: list[list[str]] = []
+    monkeypatch.setattr(formatter, "_run_ffmpeg_with_fallback", commands.append)
+
+    result = formatter.format_video_by_classification(
+        str(video_path),
+        [{"word": "Ola", "start": 0.0, "end": 0.5}],
+        "short",
+        output_directory=str(tmp_path / "output"),
+        output_stem="edicao",
+        face_tracking=False,
+        safe_area=0.1,
+    )
+
+    ass_path = Path(result["captions_ass"])
+    assert ass_path.is_file()
+    ass_content = ass_path.read_text(encoding="utf-8-sig")
+    assert "Dialogue: 0," in ass_content
+    assert ",108,108,192,1" in ass_content
+    assert len(commands) == 2
+    video_filter = commands[0][commands[0].index("-vf") + 1]
+    assert "ass=filename='" in video_filter
+    assert formatter.escape_path_for_ffmpeg_filter(str(ass_path)) in video_filter

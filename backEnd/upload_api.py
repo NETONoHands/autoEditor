@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import tempfile
 import threading
 import uuid
@@ -90,6 +91,10 @@ class EditRequest(BaseModel):
     face_tracking: bool = True
     display_title: str | None = None
     safe_area: float = Field(default=0.0, ge=0.0, le=0.2)
+    crop_x: int | None = None
+    crop_y: int | None = None
+    crop_w: int | None = None
+    crop_h: int | None = None
 
 
 class RemovedInterval(BaseModel):
@@ -198,6 +203,10 @@ def _run_edit(project_id: str, edit_id: str, request: EditRequest) -> None:
             face_tracking=request.face_tracking,
             display_title=request.display_title or "",
             safe_area=request.safe_area,
+            crop_x=request.crop_x,
+            crop_y=request.crop_y,
+            crop_w=request.crop_w,
+            crop_h=request.crop_h,
         )
         files = [
             {"output_id": path.name, "filename": path.name, "size_bytes": path.stat().st_size}
@@ -322,6 +331,55 @@ def project_video(project_id: str) -> FileResponse:
     if not video_path.is_file():
         raise HTTPException(status_code=404, detail="Vídeo não encontrado.")
     return FileResponse(video_path, media_type="video/mp4")
+
+
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm"}
+
+
+def _find_aroll_video(project_dir: Path) -> Path | None:
+    aroll_dir = project_dir / "Videos" / "A-Roll"
+    if aroll_dir.is_dir():
+        for candidate in sorted(aroll_dir.iterdir()):
+            if candidate.is_file() and candidate.suffix.lower() in VIDEO_EXTENSIONS:
+                return candidate
+    # O upload grava o vídeo em input/ e não popula A-Roll.
+    fallback = project_dir / "input" / "video.mp4"
+    return fallback if fallback.is_file() else None
+
+
+@app.get("/api/projects/{project_id}/thumbnail")
+def project_thumbnail(project_id: str) -> FileResponse:
+    project_dir = _project_directory(project_id)
+    thumbnail_path = project_dir / "thumbnail.jpg"
+
+    if not thumbnail_path.is_file():
+        video_path = _find_aroll_video(project_dir)
+        if video_path is None:
+            raise HTTPException(status_code=404, detail="Vídeo original não encontrado.")
+
+        command = [
+            "ffmpeg", "-y",
+            "-ss", "00:00:05",
+            "-i", str(video_path),
+            "-vframes", "1",
+            "-q:v", "2",
+            str(thumbnail_path),
+        ]
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True)
+        except FileNotFoundError:
+            raise HTTPException(status_code=500, detail="FFmpeg não encontrado.")
+        except subprocess.CalledProcessError as error:
+            LOGGER.error("Falha ao gerar thumbnail: %s", error.stderr)
+            thumbnail_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail="Falha ao gerar thumbnail.")
+
+        # Vídeos com menos de 5s não geram frame com -ss 5.
+        if not thumbnail_path.is_file() or thumbnail_path.stat().st_size == 0:
+            thumbnail_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail="Thumbnail não foi gerada.")
+
+    return FileResponse(thumbnail_path, media_type="image/jpeg")
 
 
 @app.get("/api/projects/{project_id}/captions")

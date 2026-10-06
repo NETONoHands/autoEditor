@@ -352,3 +352,20 @@ def test_create_cut_removes_interval_and_rebases_captions(
     assert captions[1]["word"] == "Mundo"
     assert captions[1]["start"] == pytest.approx(2.0)
     assert captions[1]["end"] == pytest.approx(3.0)
+
+def test_thumbnail_generates_once_and_returns_jpeg(client, monkeypatch):
+    import upload_api
+    project_id = _upload_project(client)
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        Path(command[-1]).write_bytes(b"jpg")
+
+    monkeypatch.setattr(upload_api.subprocess, "run", fake_run)
+    first = client.get(f"/api/projects/{project_id}/thumbnail")
+    second = client.get(f"/api/projects/{project_id}/thumbnail")
+    assert first.status_code == 200 and first.headers["content-type"] == "image/jpeg"
+    assert second.status_code == 200
+    assert len(calls) == 1
+    assert "-ss" in calls[0] and "00:00:05" in calls[0] and "-vframes" in calls[0]
