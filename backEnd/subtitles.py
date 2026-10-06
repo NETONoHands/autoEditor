@@ -45,6 +45,8 @@ def apply_subtitles_with_ffmpeg(
     video_path: str,
     subtitle_path: str,
     output_path: Optional[str] = None,
+    encoder: str = "h264_nvenc",
+    bitrate: Optional[str] = "10M",
 ) -> str:
     configure_logging()
 
@@ -58,34 +60,46 @@ def apply_subtitles_with_ffmpeg(
     )
     os.makedirs(os.path.dirname(resolved_output_path) or output_directory, exist_ok=True)
 
-    subtitle_filter = f"subtitles=filename='{escape_path_for_ffmpeg_filter(resolved_subtitle_path)}'"
+    subtitle_filter = f"ass=filename='{escape_path_for_ffmpeg_filter(resolved_subtitle_path)}'"
 
-    command = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        resolved_video_path,
-        "-vf",
-        subtitle_filter,
-        "-c:v",
-        "h264_nvenc",
-        "-rc",
-        "cbr",
-        "-b:v",
-        "10M",
-        "-minrate",
-        "10M",
-        "-maxrate",
-        "10M",
-        "-bufsize",
-        "20M",
-        "-c:a",
-        "copy",
-        resolved_output_path,
-    ]
+    def build_command(video_encoder: str) -> list[str]:
+        command = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            resolved_video_path,
+            "-vf",
+            subtitle_filter,
+            "-c:v",
+            video_encoder,
+        ]
+        if video_encoder == "h264_nvenc":
+            command.extend(["-rc", "cbr"])
+        if bitrate is not None:
+            command.extend(
+                [
+                    "-b:v",
+                    bitrate,
+                    "-minrate",
+                    bitrate,
+                    "-maxrate",
+                    bitrate,
+                    "-bufsize",
+                    "20M",
+                ]
+            )
+        command.extend(["-c:a", "copy", resolved_output_path])
+        return command
 
+    command = build_command(encoder)
     LOGGER.info("Running FFmpeg command: %s", " ".join(command))
-    subprocess.run(command, check=True)
+    try:
+        subprocess.run(command, check=True)
+    except subprocess.CalledProcessError:
+        LOGGER.warning("FFmpeg rendering failed with %s; retrying with libx264", encoder)
+        fallback_command = build_command("libx264")
+        LOGGER.info("Running FFmpeg fallback command: %s", " ".join(fallback_command))
+        subprocess.run(fallback_command, check=True)
 
     if not os.path.isfile(resolved_output_path):
         raise RuntimeError(f"Subtitled video was not created: {resolved_output_path}")

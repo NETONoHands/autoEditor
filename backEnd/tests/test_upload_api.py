@@ -323,9 +323,14 @@ def test_create_cut_removes_interval_and_rebases_captions(
     def fake_cut(video_path, remove_intervals, total_duration, output_path=None, work_dir=None):
         from cutter import compute_keep_intervals
 
-        Path(output_path).write_bytes(b"cutvideo")
+        resolved_output_path = output_path or str(Path(video_path).with_suffix(".cut.mp4"))
+        Path(resolved_output_path).write_bytes(b"cutvideo")
         keep_intervals = compute_keep_intervals(remove_intervals, total_duration)
-        return {"output_path": output_path, "keep_intervals": keep_intervals, "preserved_intervals": []}
+        return {
+            "output_path": resolved_output_path,
+            "keep_intervals": keep_intervals,
+            "preserved_intervals": [],
+        }
 
     monkeypatch.setattr(upload_api, "cut_by_removed_intervals", fake_cut)
     monkeypatch.setattr(

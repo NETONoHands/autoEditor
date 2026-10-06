@@ -29,6 +29,7 @@ from pipeline_contracts import (
     validate_video_file,
 )
 from segmentation import rebase_captions_to_intervals
+from setup_manager import ensure_project_structure
 
 LOGGER = logging.getLogger(__name__)
 
@@ -252,6 +253,7 @@ async def create_upload(
     directory = upload_root() / project_id
     input_directory = directory / "input"
     input_directory.mkdir(parents=True, exist_ok=False)
+    ensure_project_structure(str(directory))
     video_path = input_directory / "video.mp4"
     captions_path = input_directory / "captions.json"
 

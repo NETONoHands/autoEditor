@@ -9,7 +9,7 @@ import face_tracker
 
 
 def _write_test_video(path: str, width: int = 640, height: int = 360, frame_count: int = 30, fps: float = 10.0) -> None:
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    fourcc = getattr(cv2, "VideoWriter_fourcc")(*"mp4v")
     writer = cv2.VideoWriter(path, fourcc, fps, (width, height))
     frame = np.zeros((height, width, 3), dtype=np.uint8)
     for _ in range(frame_count):

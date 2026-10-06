@@ -2,6 +2,7 @@ import argparse
 import json
 import logging
 import os
+from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 import whisper
@@ -44,6 +45,7 @@ def ensure_output_directory(project_root: str) -> str:
     return output_directory
 
 
+@lru_cache(maxsize=1)
 def load_transcription_model(model_name: str = "base") -> Any:
     device = detect_device()
     LOGGER.info("Loading Whisper model '%s' on device '%s'", model_name, device)

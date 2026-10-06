@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import type { ChangeEvent, FormEvent } from 'react'
 import './App.css'
 import CaptionsEditor from './CaptionsEditor'
-import { API_URL, getEditProgress, projectVideoUrl, readCaptionsFile, startEdit, uploadProject } from './api'
-import type { Caption, Edit, EditingPace, FileState, Metadata, Orientation, Phase, SafeArea } from './types'
+import { API_URL, getEditProgress, projectVideoUrl, readCaptionsFile, requestCut, startEdit, uploadProject } from './api'
+import type { Caption, Edit, EditingPace, FileState, Metadata, Orientation, Phase, SafeArea, RemoveInterval } from './types'
 
 const bytes = (value: number) => value < 1048576 ? `${(value / 1024).toFixed(1)} KB` : `${(value / 1048576).toFixed(1)} MB`
 const duration = (value: number) => `${Math.floor(value / 60)} min ${Math.round(value % 60).toString().padStart(2, '0')} s`

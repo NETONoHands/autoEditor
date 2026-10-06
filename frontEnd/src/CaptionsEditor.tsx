@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react'
-import { projectVideoUrl, requestCut } from './api'
 import type { Caption, RemoveInterval } from './types'
 
 type CaptionsEditorProps = {
@@ -38,9 +37,8 @@ function buildRemoveIntervals(captions: Caption[], selected: Set<number>): Remov
   return intervals
 }
 
-function CaptionsEditor({ projectId, videoSrc, captions, onCaptionsChange, onVideoSrcChange, onRemoveIntervalsChange, onContinue }: CaptionsEditorProps) {
+function CaptionsEditor({ projectId: _projectId, videoSrc, captions, onCaptionsChange: _onCaptionsChange, onVideoSrcChange: _onVideoSrcChange, onRemoveIntervalsChange, onContinue }: CaptionsEditorProps) {
   const [selected, setSelected] = useState<Set<number>>(new Set())
-  const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
   const selectedCount = selected.size
@@ -80,8 +78,8 @@ function CaptionsEditor({ projectId, videoSrc, captions, onCaptionsChange, onVid
       </div>
       {error && <p className="error-message">{error}</p>}
       <div className="captions-editor-actions">
-        <button type="button" className="secondary-button" disabled={busy || selectedCount === 0} onClick={deleteSelected}>
-          {busy ? 'Cortando...' : `Excluir selecionadas (${selectedCount})`}
+        <button type="button" className="secondary-button" disabled={selectedCount === 0} onClick={deleteSelected}>
+          {`Excluir selecionadas (${selectedCount})`}
         </button>
         <button type="button" className="primary-button" onClick={onContinue}>
           Continuar para edição final <span>↗</span>
