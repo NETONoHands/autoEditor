@@ -61,18 +61,20 @@ def validate_captions_json(captions_path: str) -> str:
 
 
 def _validate_captions_payload(captions: Any) -> None:
-    if not isinstance(captions, list) or not captions:
-        raise InputValidationError("O JSON de legendas deve ser uma lista não vazia de palavras.")
+    if not isinstance(captions, list):
+        raise InputValidationError("O JSON de legendas deve ser uma lista não vazia de objetos de palavras. Foi recebido um tipo diferente na raiz.")
+    if not captions:
+        raise InputValidationError("O JSON de legendas deve ser uma lista não vazia de objetos de palavras. A lista está vazia.")
 
     previous_start = -1.0
     for index, item in enumerate(captions, start=1):
         if not isinstance(item, dict):
-            raise InputValidationError(f"Item {index} do JSON de legendas deve ser um objeto.")
+            raise InputValidationError(f"Item {index} do JSON de legendas deve ser um objeto. Formato inesperado.")
         word = item.get("word")
         start = item.get("start")
         end = item.get("end")
         if not isinstance(word, str) or not word.strip():
-            raise InputValidationError(f"Item {index} do JSON de legendas deve ter 'word' não vazio.")
+            raise InputValidationError(f"Item {index} do JSON de legendas deve ter a chave 'word' com um valor de texto não vazio.")
         if isinstance(start, bool) or isinstance(end, bool) or not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
             raise InputValidationError(f"Item {index} do JSON de legendas deve ter 'start' e 'end' numéricos.")
         start_value = float(start)

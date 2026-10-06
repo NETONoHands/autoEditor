@@ -8,6 +8,7 @@ type CaptionsEditorProps = {
   captions: Caption[]
   onCaptionsChange: (captions: Caption[]) => void
   onVideoSrcChange: (videoSrc: string) => void
+  onRemoveIntervalsChange: (intervals: RemoveInterval[]) => void
   onContinue: () => void
 }
 
@@ -37,7 +38,7 @@ function buildRemoveIntervals(captions: Caption[], selected: Set<number>): Remov
   return intervals
 }
 
-function CaptionsEditor({ projectId, videoSrc, captions, onCaptionsChange, onVideoSrcChange, onContinue }: CaptionsEditorProps) {
+function CaptionsEditor({ projectId, videoSrc, captions, onCaptionsChange, onVideoSrcChange, onRemoveIntervalsChange, onContinue }: CaptionsEditorProps) {
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -54,20 +55,10 @@ function CaptionsEditor({ projectId, videoSrc, captions, onCaptionsChange, onVid
     })
   }
 
-  async function deleteSelected() {
+  function deleteSelected() {
     if (removeIntervals.length === 0) return
-    setBusy(true)
-    setError('')
-    try {
-      const result = await requestCut(projectId, removeIntervals)
-      onCaptionsChange(result.captions)
-      onVideoSrcChange(`${projectVideoUrl(projectId)}?v=${result.cut_id}`)
-      setSelected(new Set())
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Não foi possível cortar os trechos selecionados.')
-    } finally {
-      setBusy(false)
-    }
+    onRemoveIntervalsChange(removeIntervals)
+    onContinue()
   }
 
   return (

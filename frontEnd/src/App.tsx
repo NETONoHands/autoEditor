@@ -22,6 +22,7 @@ function App() {
   const [projectId, setProjectId] = useState('')
   const [videoSrc, setVideoSrc] = useState('')
   const [captions, setCaptions] = useState<Caption[]>([])
+  const [removeIntervals, setRemoveIntervals] = useState<RemoveInterval[]>([])
   const [edit, setEdit] = useState<Edit | null>(null)
   const [error, setError] = useState('')
 
@@ -64,19 +65,26 @@ function App() {
   async function finishEditing() {
     setError(''); setPhase('progress')
     try {
+      if (removeIntervals.length > 0) {
+        const cutResponse = await requestCut(projectId, removeIntervals)
+        setVideoSrc(cutResponse.video_url)
+        setCaptions(cutResponse.captions)
+        setMetadata(cutResponse.metadata)
+      }
+
       const silenceThreshold = editingPace === 'natural' ? 0.3 : editingPace === 'fast' ? 0.15 : 0.1
-      const started = await startEdit(projectId, { name: title.trim(), display_title: displayTitle.trim(), orientation, remove_silence: true, silence_threshold: silenceThreshold, face_tracking: orientation === 'vertical', safe_area: orientation === 'vertical' ? safeArea : 0 })
+      const started = await startEdit(projectId, { name: title.trim(), display_title: displayTitle.trim(), orientation, remove_silence: editingPace !== 'jump-cut', silence_threshold: silenceThreshold, face_tracking: safeArea === 0, safe_area: safeArea })
       setEdit(started)
     } catch (reason) { setPhase('editing'); setError(reason instanceof Error ? reason.message : 'Não foi possível iniciar a edição.') }
   }
 
-  function reset() { setPhase('input'); setVideo(null); setCaptionsFile(null); setTitle(''); setDisplayTitle(''); setEditingPace('natural'); setSafeArea(0); setMetadata(null); setProjectId(''); setVideoSrc(''); setCaptions([]); setEdit(null); setError(''); setFileState({ video: 'idle', captions: 'idle' }) }
+  function reset() { setPhase('input'); setVideo(null); setCaptionsFile(null); setTitle(''); setDisplayTitle(''); setEditingPace('natural'); setSafeArea(0); setMetadata(null); setProjectId(''); setVideoSrc(''); setCaptions([]); setEdit(null); setError(''); setFileState({ video: 'idle', captions: 'idle' }); setRemoveIntervals([]) }
   const stage = edit?.status === 'queued' ? 'Na fila' : edit?.status === 'running' ? edit.stage || 'Processando' : edit?.status === 'completed' ? 'Concluído' : 'Falhou'
 
   return <main className="app-shell">
     <header className="topbar"><div className="brand-mark">TL</div><div><span className="kicker">estúdio de edição</span><h1>Tapa na Lata</h1></div><span className="version">MVP / 01</span></header>
     {phase === 'input' && <form className="workspace" onSubmit={start}><section className="intro"><p className="eyebrow">01 / entrada</p><h2>Deixe o vídeo pronto<br /><em>para bater forte.</em></h2><p className="intro-copy">Envie a gravação e a legenda. A gente cuida do corte, do som e do enquadramento.</p></section><section className="form-panel"><FileDrop label="Vídeo da live" hint="MP4 · até 2 GB" state={fileState.video} file={video} accept=".mp4" onChange={(event) => chooseFile('video', event.target.files?.[0])} /><FileDrop label="Legenda" hint="JSON · palavra a palavra" state={fileState.captions} file={captionsFile} accept=".json" onChange={(event) => chooseFile('captions', event.target.files?.[0])} /><label className="field-label">Nome da edição<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Ex.: Como funciona o Quadstick" /></label><label className="field-label">Título no vídeo <small>(opcional)</small><input value={displayTitle} onChange={(event) => setDisplayTitle(event.target.value)} placeholder="Deixe vazio para não exibir" /></label><div className="orientation-row"><span className="field-label">Formato de saída</span><div className="segmented">{(['vertical', 'horizontal'] as Orientation[]).map((item) => <button type="button" className={orientation === item ? 'selected' : ''} key={item} onClick={() => setOrientation(item)}>{item === 'vertical' ? '9:16 vertical' : '16:9 horizontal'}</button>)}</div></div><div className="orientation-row"><span className="field-label">Ritmo de edição</span><div className="segmented">{([{ value: 'natural', label: 'Natural' }, { value: 'fast', label: 'Rápido' }, { value: 'jump-cut', label: 'Jump cut' }] as const).map((item) => <button type="button" className={editingPace === item.value ? 'selected' : ''} key={item.value} onClick={() => setEditingPace(item.value)}>{item.label}</button>)}</div></div>{orientation === 'vertical' && <div className="orientation-row"><span className="field-label">Área segura</span><div className="segmented">{([{ value: 0, label: 'Sem margem' }, { value: 0.1, label: '10%' }, { value: 0.15, label: '15%' }] as const).map((item) => <button type="button" className={safeArea === item.value ? 'selected' : ''} key={item.value} onClick={() => setSafeArea(item.value)}>{item.label}</button>)}</div></div>}{metadata && <div className="metadata-grid"><Metric label="duração" value={duration(metadata.duration_seconds)} /><Metric label="resolução" value={metadata.resolution_label} /><Metric label="formato" value={metadata.codec.toUpperCase()} /><Metric label="tamanho" value={bytes(metadata.size_bytes)} /></div>}{error && <p className="error-message">{error}</p>}<button className="primary-button" disabled={!valid || fileState.video === 'loading' || fileState.captions === 'loading'}>Iniciar edição <span>↗</span></button></section></form>}
-    {phase === 'editing' && <CaptionsEditor projectId={projectId} videoSrc={videoSrc} captions={captions} onCaptionsChange={setCaptions} onVideoSrcChange={setVideoSrc} onContinue={finishEditing} />}
+    {phase === 'editing' && <CaptionsEditor projectId={projectId} videoSrc={videoSrc} captions={captions} onCaptionsChange={setCaptions} onVideoSrcChange={setVideoSrc} onRemoveIntervalsChange={setRemoveIntervals} onContinue={finishEditing} />}
       {phase !== 'input' && phase !== 'editing' && <section className="progress-view"><p className="eyebrow">03 / processamento</p><h2>{edit?.status === 'failed' ? 'Algo saiu do eixo.' : edit?.status === 'completed' ? 'Está na lata.' : 'Ajustando cada detalhe.'}</h2>{metadata && <div className="metadata-grid progress-metadata"><Metric label="duração" value={duration(metadata.duration_seconds)} /><Metric label="resolução" value={metadata.resolution_label} /><Metric label="formato" value={metadata.codec.toUpperCase()} /><Metric label="tamanho" value={bytes(metadata.size_bytes)} /></div>}<div className="progress-card"><div className="progress-head"><span>{stage}</span><strong>{edit?.progress_percent || 0}%</strong></div><div className="progress-track"><div style={{ width: `${edit?.progress_percent || 0}%` }} /></div><p className="stage-copy">{edit?.status === 'failed' ? edit.error : 'Aplicando tratamento, enquadramento e acabamento à sua edição.'}</p></div>{phase === 'done' && <div className="results"><p className="eyebrow">arquivos finais</p>{edit?.outputs?.filter((item) => /\.json$/i.test(item.filename) || (item.filename.toLowerCase().includes(orientation) && item.filename.endsWith('.mp4'))).map((item) => <a className="result-link" href={`${API_URL}/api/projects/${projectId}/edits/${edit.edit_id}/outputs/${item.output_id}/download`} key={item.output_id}><span>{item.filename.endsWith('.json') ? 'JSON' : orientation === 'vertical' ? '9:16' : '16:9'}</span>{item.filename}<b>↓</b></a>)}</div>}<button className="secondary-button" type="button" onClick={reset}>+ Novo processamento</button></section>}
   </main>
 }

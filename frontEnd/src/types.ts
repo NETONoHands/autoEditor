@@ -35,6 +35,11 @@ export type RawCaptionsPayload = { legendas: RawCaption[] }
 
 export type RemoveInterval = { start: number; end: number }
 
+
+export type CutRequest = {
+  remove_intervals: RemoveInterval[]
+}
+
 export type CutResponse = {
   project_id: string
   cut_id: string

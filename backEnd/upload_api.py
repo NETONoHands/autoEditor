@@ -168,14 +168,13 @@ def _validate_saved_files(video_path: Path, captions_path: Path) -> Any:
 def _normalize_captions_file(captions_path: Path) -> None:
     # Reescreve o JSON recebido (legado ou {"legendas":[{"texto",...}]}) no formato interno {word,start,end}.
     try:
-        raw_payload = json.loads(captions_path.read_text(encoding="utf-8-sig"))
-        normalized = serialize_captions(normalize_captions_payload(raw_payload))
-    except (json.JSONDecodeError, InputValidationError) as exc:
+        normalized_captions = load_captions_json(str(captions_path))
+        captions_path.write_text(json.dumps(normalized_captions, ensure_ascii=False, indent=2), encoding="utf-8")
+    except InputValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
-    captions_path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _run_edit(project_id: str, edit_id: str, request: EditRequest) -> None:
@@ -261,6 +260,12 @@ async def create_upload(
         captions_size = await _save_upload(captions, captions_path, max_captions_bytes())
         _normalize_captions_file(captions_path)
         metadata_object = _validate_saved_files(video_path, captions_path)
+    except InputValidationError as exc:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
     except HTTPException:
         shutil.rmtree(directory, ignore_errors=True)
         raise

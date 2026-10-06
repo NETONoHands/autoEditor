@@ -14,9 +14,8 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("TAPA_NA_LATA_MAX_VIDEO_BYTES", "100")
     monkeypatch.setenv("TAPA_NA_LATA_MAX_CAPTIONS_BYTES", "200")
     monkeypatch.setattr(
-        upload_api,
-        "_validate_saved_files",
-        lambda video, captions: VideoMetadata(str(video), 10.0, 1280, 720, "h264", video.stat().st_size),
+        upload_api, "validate_video_file",
+        lambda path: VideoMetadata(str(path), 10.0, 1280, 720, "h264", Path(path).stat().st_size)
     )
     upload_api.EDIT_STATES.clear()
     return TestClient(upload_api.app)
@@ -112,6 +111,90 @@ def test_upload_rejects_invalid_extensions(client: TestClient) -> None:
 
     assert response.status_code == 415
     assert list((Path(upload_api.upload_root())).iterdir()) == []
+
+
+def test_upload_rejects_invalid_captions_root_type(client: TestClient) -> None:
+    invalid_captions_json = json.dumps({}).encode("utf-8")
+    response = client.post(
+        "/api/uploads",
+        data={"title": "Título"},
+        files={
+            "video": ("entrada.mp4", b"video_content", "video/mp4"),
+            "captions": ("legenda.json", invalid_captions_json, "application/json"),
+        },
+    )
+    assert response.status_code == 400
+    assert "O JSON de legendas deve ser uma lista ou conter a chave 'legendas'." in response.json()["detail"]
+
+
+def test_upload_rejects_empty_captions_list(client: TestClient) -> None:
+    empty_captions_json = json.dumps([]).encode("utf-8")
+    response = client.post(
+        "/api/uploads",
+        data={"title": "Título"},
+        files={
+            "video": ("entrada.mp4", b"video_content", "video/mp4"),
+            "captions": ("legenda.json", empty_captions_json, "application/json"),
+        },
+    )
+    assert response.status_code == 400
+    assert "A lista está vazia" in response.json()["detail"]
+
+
+def test_upload_rejects_invalid_captions_item_type(client: TestClient) -> None:
+    invalid_item_captions_json = json.dumps(["palavra1", "palavra2"]).encode("utf-8")
+    response = client.post(
+        "/api/uploads",
+        data={"title": "Título"},
+        files={
+            "video": ("entrada.mp4", b"video_content", "video/mp4"),
+            "captions": ("legenda.json", invalid_item_captions_json, "application/json"),
+        },
+    )
+    assert response.status_code == 400
+    assert "Formato inesperado" in response.json()["detail"]
+
+
+def test_upload_rejects_captions_missing_or_empty_word(client: TestClient) -> None:
+    missing_word_captions_json = json.dumps([{"start": 0.0, "end": 1.0}]).encode("utf-8")
+    empty_word_captions_json = json.dumps([{"word": "", "start": 0.0, "end": 1.0}]).encode("utf-8")
+
+    # Teste com 'word' ausente
+    response_missing = client.post(
+        "/api/uploads",
+        data={"title": "Título"},
+        files={
+            "video": ("entrada.mp4", b"video_content", "video/mp4"),
+            "captions": ("legenda.json", missing_word_captions_json, "application/json"),
+        },
+    )
+    assert response_missing.status_code == 400
+    assert "deve ter a chave 'word' com um valor de texto não vazio" in response_missing.json()["detail"]
+
+    # Teste com 'word' vazio
+    response_empty = client.post(
+        "/api/uploads",
+        data={"title": "Título"},
+        files={
+            "video": ("entrada.mp4", b"video_content", "video/mp4"),
+            "captions": ("legenda.json", empty_word_captions_json, "application/json"),
+        },
+    )
+    assert response_empty.status_code == 400
+    assert "deve ter a chave 'word' com um valor de texto não vazio" in response_empty.json()["detail"]
+
+
+def test_upload_accepts_valid_captions_format(client: TestClient) -> None:
+    valid_captions_json = json.dumps([{"word": "Teste", "start": 0.0, "end": 1.0}]).encode("utf-8")
+    response = client.post(
+        "/api/uploads",
+        data={"title": "Título"},
+        files={
+            "video": ("entrada.mp4", b"video_content", "video/mp4"),
+            "captions": ("legenda.json", valid_captions_json, "application/json"),
+        },
+    )
+    assert response.status_code == 201
 
 
 def test_upload_rejects_video_above_configured_limit(client: TestClient) -> None:
