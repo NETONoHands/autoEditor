@@ -45,6 +45,7 @@ function CaptionsEditor({ projectId: _projectId, videoSrc, captions, onCaptionsC
   const removeIntervals = useMemo(() => buildRemoveIntervals(captions, selected), [captions, selected])
 
   function toggleWord(index: number) {
+    setError('')
     setSelected((current) => {
       const next = new Set(current)
       if (next.has(index)) next.delete(index)
@@ -54,7 +55,11 @@ function CaptionsEditor({ projectId: _projectId, videoSrc, captions, onCaptionsC
   }
 
   function deleteSelected() {
-    if (removeIntervals.length === 0) return
+    if (removeIntervals.length === 0) {
+      setError('Selecione ao menos um intervalo válido para excluir.')
+      return
+    }
+    setError('')
     onRemoveIntervalsChange(removeIntervals)
     onContinue()
   }
@@ -78,7 +83,7 @@ function CaptionsEditor({ projectId: _projectId, videoSrc, captions, onCaptionsC
       </div>
       {error && <p className="error-message">{error}</p>}
       <div className="captions-editor-actions">
-        <button type="button" className="secondary-button" disabled={selectedCount === 0} onClick={deleteSelected}>
+        <button type="button" className="secondary-button" onClick={deleteSelected}>
           {`Excluir selecionadas (${selectedCount})`}
         </button>
         <button type="button" className="primary-button" onClick={onContinue}>

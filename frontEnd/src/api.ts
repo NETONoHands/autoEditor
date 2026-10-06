@@ -1,4 +1,4 @@
-import type { Caption, CutResponse, Edit, RemoveInterval, Upload } from './types'
+import type { Caption, CutResponse, Edit, EditConfig, RemoveInterval, Upload } from './types'
 
 export const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
 
@@ -25,7 +25,7 @@ export function requestCut(projectId: string, removeIntervals: RemoveInterval[])
   })
 }
 
-export function startEdit(projectId: string, payload: Record<string, unknown>): Promise<Edit> {
+export function startEdit(projectId: string, payload: EditConfig): Promise<Edit> {
   return api<Edit>(`/api/projects/${projectId}/edits`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

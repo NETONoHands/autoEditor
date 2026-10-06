@@ -83,6 +83,22 @@ def build_center_crop_9x16_filter() -> str:
     return "crop=ih*9/16:ih:(iw-ow)/2:0"
 
 
+def has_manual_crop(
+    crop_x: Optional[int],
+    crop_y: Optional[int],
+    crop_w: Optional[int],
+    crop_h: Optional[int],
+) -> bool:
+    return (
+        crop_x is not None
+        and crop_y is not None
+        and crop_w is not None
+        and crop_h is not None
+        and crop_w > 0
+        and crop_h > 0
+    )
+
+
 def build_vertical_crop_filter(
     crop_x: Optional[int] = None,
     crop_y: Optional[int] = None,

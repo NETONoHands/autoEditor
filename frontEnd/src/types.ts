@@ -26,6 +26,20 @@ export type Edit = {
   outputs?: Output[]
 }
 
+export type EditConfig = {
+  name: string
+  display_title: string
+  orientation: Orientation
+  remove_silence: boolean
+  silence_threshold: number
+  face_tracking: boolean
+  safe_area: SafeArea
+  crop_x?: number | null
+  crop_y?: number | null
+  crop_w?: number | null
+  crop_h?: number | null
+}
+
 /** Uma palavra transcrita com seus tempos absolutos (segundos decimais). */
 export type Caption = { word: string; start: number; end: number }
 
