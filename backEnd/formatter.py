@@ -240,12 +240,30 @@ def build_split_screen_filter(
     content_crop_w: int,
     content_crop_h: int,
     subtitle_path: str,
+    title: str = "",
+    safe_area: float = 0.0,
 ) -> str:
-    """Monta o -filter_complex 1080x1920: câmera no topo, conteúdo colado embaixo, legenda por cima."""
+    """Monta o -filter_complex 1080x1920: câmera no topo, conteúdo colado embaixo, título e legenda por cima."""
     escaped_subtitle_path = escape_path_for_ffmpeg_filter(subtitle_path)
     subtitle_filter = f"ass='{escaped_subtitle_path}'"
     if os.path.isdir(FONTS_DIR):
         subtitle_filter += f":fontsdir='{escape_path_for_ffmpeg_filter(FONTS_DIR)}'"
+    title_node = "[composed]null[with_title]"
+    if title.strip():
+        fontfile = resolve_title_fontfile()
+        if fontfile is None:
+            LOGGER.warning("Title font not found; skipping drawtext to avoid FFmpeg fontconfig failure")
+        else:
+            title_y, _ = _safe_text_margins(safe_area)
+            title_node = (
+                "[composed]drawtext="
+                f"fontfile='{escape_path_for_ffmpeg_filter(fontfile)}':"
+                f"text='{escape_drawtext_text(title.strip())}':"
+                "fontsize=42:fontcolor=yellow:"
+                f"borderw=3:bordercolor=black:x=(w-text_w)/2:y={title_y}:"
+                "enable='between(t,0,5)':alpha='if(lt(t,0.5),t/0.5,if(lt(t,4.5),1,(5-t)/0.5))'"
+                "[with_title]"
+            )
     return (
         "[0:v]split=3[bg_orig][cam_orig][cont_orig];"
         "[bg_orig]scale=1080:1920:force_original_aspect_ratio=increase,"
@@ -256,7 +274,8 @@ def build_split_screen_filter(
         f"{max(0, int(content_crop_x))}:{max(0, int(content_crop_y))},scale=1080:-1[cont_scaled];"
         "[bg][cont_scaled]overlay=0:1920-h[bg_with_cont];"
         "[bg_with_cont][cam_scaled]overlay=0:0[composed];"
-        f"[composed]{subtitle_filter}[vid_out]"
+        f"{title_node};"
+        f"[with_title]{subtitle_filter},format=yuv420p[vid_out]"
     )
 
 
@@ -368,6 +387,8 @@ def format_video_by_classification(
             crop_x, crop_y, crop_w, crop_h,
             content_crop_x, content_crop_y, content_crop_w, content_crop_h,
             captions_ass_path,
+            title=title,
+            safe_area=safe_area,
         )
     return _render_classified_outputs(
         resolved_video_path,
