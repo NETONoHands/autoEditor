@@ -5,12 +5,14 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Annotated, Any, Optional
 
+from filelock import FileLock
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -81,8 +83,19 @@ cors_origins = [origin.strip() for origin in os.getenv(
 ).split(",") if origin.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=cors_origins, allow_methods=["*"], allow_headers=["*"], allow_credentials=False)
 EDIT_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tapa-edit")
-EDIT_STATES: dict[str, dict[str, Any]] = {}
-EDIT_STATES_LOCK = threading.Lock()
+ACTIVE_EDIT_STATUSES = frozenset({"queued", "running"})
+# Apenas liveness deste processo (não é estado de negócio): edições que este processo está a tratar.
+_ACTIVE_EDITS: set[tuple[str, str]] = set()
+_ACTIVE_EDITS_LOCK = threading.Lock()
+_HEARTBEAT_THREAD: threading.Thread | None = None
+
+
+def edit_stale_seconds() -> int:
+    return _positive_int_from_env("TAPA_NA_LATA_EDIT_STALE_SECONDS", 30)
+
+
+def edit_heartbeat_interval_seconds() -> float:
+    return max(edit_stale_seconds() / 6, 0.1)
 
 
 class EditRequest(BaseModel):
@@ -189,14 +202,108 @@ def _normalize_captions_file(captions_path: Path) -> None:
         ) from exc
 
 
+def _edit_state_paths(project_id: str, edit_id: str) -> tuple[Path, Path]:
+    try:
+        uuid.UUID(project_id)
+        uuid.UUID(edit_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Edição não encontrada.") from exc
+    edit_directory = upload_root() / project_id / "edits" / edit_id
+    return edit_directory / "state.json", edit_directory / "state.json.lock"
+
+
+def _atomic_write_state(state_path: Path, state: dict[str, Any]) -> None:
+    temporary_path = state_path.with_suffix(".json.tmp")
+    temporary_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temporary_path, state_path)
+
+
+def _mark_active(project_id: str, edit_id: str) -> None:
+    global _HEARTBEAT_THREAD
+    with _ACTIVE_EDITS_LOCK:
+        _ACTIVE_EDITS.add((project_id, edit_id))
+        if _HEARTBEAT_THREAD is None or not _HEARTBEAT_THREAD.is_alive():
+            _HEARTBEAT_THREAD = threading.Thread(
+                target=_heartbeat_loop, name="tapa-edit-heartbeat", daemon=True
+            )
+            _HEARTBEAT_THREAD.start()
+
+
+def _mark_inactive(project_id: str, edit_id: str) -> None:
+    with _ACTIVE_EDITS_LOCK:
+        _ACTIVE_EDITS.discard((project_id, edit_id))
+
+
+def _is_active_here(project_id: str, edit_id: str) -> bool:
+    with _ACTIVE_EDITS_LOCK:
+        return (project_id, edit_id) in _ACTIVE_EDITS
+
+
+def _heartbeat_loop() -> None:
+    # Renova o carimbo das edições deste processo; se o processo morrer, o carimbo expira.
+    while True:
+        time.sleep(edit_heartbeat_interval_seconds())
+        with _ACTIVE_EDITS_LOCK:
+            active = list(_ACTIVE_EDITS)
+        for project_id, edit_id in active:
+            try:
+                state_path, lock_path = _edit_state_paths(project_id, edit_id)
+                with FileLock(str(lock_path)):
+                    state = json.loads(state_path.read_text(encoding="utf-8"))
+                    if state.get("status") in ACTIVE_EDIT_STATUSES:
+                        state["heartbeat_at"] = time.time()
+                        _atomic_write_state(state_path, state)
+            except Exception:
+                LOGGER.debug("Falha ao renovar heartbeat da edição %s", edit_id, exc_info=True)
+
+
+def _read_edit_state(project_id: str, edit_id: str) -> dict[str, Any] | None:
+    state_path, lock_path = _edit_state_paths(project_id, edit_id)
+    if not state_path.parent.is_dir():
+        return None
+    with FileLock(str(lock_path)):
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        if (
+            state.get("status") in ACTIVE_EDIT_STATUSES
+            and not _is_active_here(project_id, edit_id)
+            and time.time() - float(state.get("heartbeat_at", 0)) > edit_stale_seconds()
+        ):
+            state.update(
+                {
+                    "status": "failed",
+                    "progress_percent": 100,
+                    "stage": "failed",
+                    "error": "A edição foi interrompida (o servidor foi reiniciado ou parou). Inicie-a novamente.",
+                }
+            )
+            _atomic_write_state(state_path, state)
+        return state
+
+
+def _write_edit_state(project_id: str, edit_id: str, state: dict[str, Any]) -> None:
+    state_path, lock_path = _edit_state_paths(project_id, edit_id)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state["heartbeat_at"] = time.time()
+    with FileLock(str(lock_path)):
+        _atomic_write_state(state_path, state)
+
+
 def _run_edit(project_id: str, edit_id: str, request: EditRequest) -> None:
     project_directory = upload_root() / project_id
     input_directory = project_directory / "input"
     output_directory = project_directory / "edits" / edit_id / "output"
     output_directory.mkdir(parents=True, exist_ok=True)
-    state = EDIT_STATES[edit_id]
+    state = _read_edit_state(project_id, edit_id) or {
+        "project_id": project_id,
+        "edit_id": edit_id,
+        "outputs": [],
+    }
     try:
         state.update({"status": "running", "progress_percent": 10, "stage": "processing"})
+        _write_edit_state(project_id, edit_id, state)
         result = run_pipeline(
             str(input_directory / "video.mp4"),
             str(input_directory / "captions.json"),
@@ -233,16 +340,23 @@ def _run_edit(project_id: str, edit_id: str, request: EditRequest) -> None:
                 "result": result,
             }
         )
+        _write_edit_state(project_id, edit_id, state)
     except Exception as exc:
         LOGGER.exception("Edição %s falhou", edit_id)
         state.update({"status": "failed", "progress_percent": 100, "stage": "failed", "error": str(exc)})
+        try:
+            _write_edit_state(project_id, edit_id, state)
+        except Exception:
+            LOGGER.exception("Não foi possível guardar o estado falhado da edição %s", edit_id)
+    finally:
+        _mark_inactive(project_id, edit_id)
 
 
 def _public_edit_state(state: dict[str, Any]) -> dict[str, Any]:
     return {
         key: value
         for key, value in state.items()
-        if key not in {"result"}
+        if key not in {"result", "heartbeat_at"}
     }
 
 
@@ -504,9 +618,9 @@ def start_edit(project_id: str, request: EditRequest) -> dict[str, Any]:
         "stage": "queued",
         "outputs": [],
     }
-    with EDIT_STATES_LOCK:
-        EDIT_STATES[edit_id] = state
     (upload_root() / project_id / "edits" / edit_id / "output").mkdir(parents=True, exist_ok=True)
+    _mark_active(project_id, edit_id)
+    _write_edit_state(project_id, edit_id, state)
     EDIT_EXECUTOR.submit(_run_edit, project_id, edit_id, request.model_copy(update={"name": name}))
     return _public_edit_state(state)
 
@@ -514,9 +628,8 @@ def start_edit(project_id: str, request: EditRequest) -> dict[str, Any]:
 @app.get("/api/projects/{project_id}/edits/{edit_id}")
 def edit_progress(project_id: str, edit_id: str) -> dict[str, Any]:
     _project_directory(project_id)
-    with EDIT_STATES_LOCK:
-        state = EDIT_STATES.get(edit_id)
-    if state is None or state["project_id"] != project_id:
+    state = _read_edit_state(project_id, edit_id)
+    if state is None or state.get("project_id") != project_id:
         raise HTTPException(status_code=404, detail="Edição não encontrada.")
     return _public_edit_state(state)
 

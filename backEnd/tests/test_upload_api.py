@@ -17,7 +17,6 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
         upload_api, "validate_video_file",
         lambda path: VideoMetadata(str(path), 10.0, 1280, 720, "h264", Path(path).stat().st_size)
     )
-    upload_api.EDIT_STATES.clear()
     return TestClient(upload_api.app)
 
 
@@ -263,14 +262,14 @@ def test_completed_edit_supports_file_and_zip_downloads(client: TestClient) -> N
     output_directory = upload_api.upload_root() / project_id / "edits" / edit_id / "output"
     output_directory.mkdir(parents=True)
     (output_directory / "resultado.mp4").write_bytes(b"resultado")
-    upload_api.EDIT_STATES[edit_id] = {
+    upload_api._write_edit_state(project_id, edit_id, {
         "project_id": project_id,
         "edit_id": edit_id,
         "status": "completed",
         "progress_percent": 100,
         "stage": "completed",
         "outputs": [{"output_id": "resultado.mp4", "filename": "resultado.mp4", "size_bytes": 9}],
-    }
+    })
 
     file_response = client.get(
         f"/api/projects/{project_id}/edits/{edit_id}/outputs/resultado.mp4/download"
@@ -283,17 +282,63 @@ def test_completed_edit_supports_file_and_zip_downloads(client: TestClient) -> N
     assert zip_response.headers["content-type"] == "application/zip"
 
 
+def test_orphaned_running_edit_is_reported_as_failed(client: TestClient) -> None:
+    project_id = _upload_project(client)
+    edit_id = "8b3f3f6e-4d2f-4b43-b7d2-4c1f2b8a2c10"
+    state = {
+        "project_id": project_id,
+        "edit_id": edit_id,
+        "status": "running",
+        "progress_percent": 10,
+        "stage": "processing",
+        "outputs": [],
+    }
+    upload_api._write_edit_state(project_id, edit_id, state)
+    state_path, _ = upload_api._edit_state_paths(project_id, edit_id)
+    stored = json.loads(state_path.read_text(encoding="utf-8"))
+    stored["heartbeat_at"] = 0
+    state_path.write_text(json.dumps(stored), encoding="utf-8")
+
+    response = client.get(f"/api/projects/{project_id}/edits/{edit_id}")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert "interrompida" in response.json()["error"]
+    assert "heartbeat_at" not in response.json()
+    assert json.loads(state_path.read_text(encoding="utf-8"))["status"] == "failed"
+
+
+def test_running_edit_owned_by_this_process_is_not_marked_failed(client: TestClient) -> None:
+    project_id = _upload_project(client)
+    edit_id = "8b3f3f6e-4d2f-4b43-b7d2-4c1f2b8a2c10"
+    upload_api._write_edit_state(project_id, edit_id, {
+        "project_id": project_id, "edit_id": edit_id, "status": "running",
+        "progress_percent": 10, "stage": "processing", "outputs": [],
+    })
+    state_path, _ = upload_api._edit_state_paths(project_id, edit_id)
+    stored = json.loads(state_path.read_text(encoding="utf-8"))
+    stored["heartbeat_at"] = 0
+    state_path.write_text(json.dumps(stored), encoding="utf-8")
+    upload_api._mark_active(project_id, edit_id)
+    try:
+        response = client.get(f"/api/projects/{project_id}/edits/{edit_id}")
+    finally:
+        upload_api._mark_inactive(project_id, edit_id)
+
+    assert response.json()["status"] == "running"
+
+
 def test_download_is_blocked_before_edit_completion(client: TestClient) -> None:
     project_id = _upload_project(client)
     edit_id = "8b3f3f6e-4d2f-4b43-b7d2-4c1f2b8a2c10"
-    upload_api.EDIT_STATES[edit_id] = {
+    upload_api._write_edit_state(project_id, edit_id, {
         "project_id": project_id,
         "edit_id": edit_id,
         "status": "running",
         "progress_percent": 50,
         "stage": "processing",
         "outputs": [],
-    }
+    })
 
     response = client.get(
         f"/api/projects/{project_id}/edits/{edit_id}/outputs/resultado.mp4/download"
