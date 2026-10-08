@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -9,11 +10,14 @@ import time
 import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager, suppress
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Optional
 
 from filelock import FileLock
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -76,7 +80,83 @@ def upload_root() -> Path:
     return root
 
 
-app = FastAPI(title="Tapa na Lata", version="0.1.0")
+CLEANUP_INTERVAL_SECONDS = 60 * 60
+CLEANUP_MAX_AGE_SECONDS = 24 * 60 * 60
+
+
+def _latest_mtime(directory: Path) -> float:
+    # O mtime da pasta não muda quando ficheiros aninhados são escritos; usa o mais recente da árvore.
+    latest = os.path.getmtime(directory)
+    for current, _dirs, files in os.walk(directory):
+        for name in files:
+            try:
+                latest = max(latest, os.path.getmtime(os.path.join(current, name)))
+            except OSError:
+                continue
+    return latest
+
+
+def _directory_size(directory: Path) -> int:
+    total = 0
+    for current, _dirs, files in os.walk(directory):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(current, name))
+            except OSError:
+                continue
+    return total
+
+
+def _cleanup_old_projects() -> tuple[int, int]:
+    removed = 0
+    freed = 0
+    cutoff = time.time() - CLEANUP_MAX_AGE_SECONDS
+    with _ACTIVE_EDITS_LOCK:
+        active_projects = {project_id for project_id, _ in _ACTIVE_EDITS}
+    for directory in upload_root().iterdir():
+        try:
+            if not directory.is_dir() or directory.name in active_projects:
+                continue
+            if _latest_mtime(directory) >= cutoff:
+                continue
+            size = _directory_size(directory)
+            shutil.rmtree(directory)
+            removed += 1
+            freed += size
+        except OSError:
+            LOGGER.exception("Falha ao limpar a pasta de upload %s", directory)
+    return removed, freed
+
+
+async def _background_cleanup_task() -> None:
+    while True:
+        try:
+            removed, freed = await asyncio.to_thread(_cleanup_old_projects)
+            LOGGER.info(
+                "Limpeza de uploads: %d pasta(s) removida(s), %d bytes libertados (%s)",
+                removed,
+                freed,
+                datetime.now().isoformat(timespec="seconds"),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOGGER.exception("Falha na limpeza periódica de uploads")
+        await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    cleanup_task = asyncio.create_task(_background_cleanup_task())
+    try:
+        yield
+    finally:
+        cleanup_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await cleanup_task
+
+
+app = FastAPI(title="Tapa na Lata", version="0.1.0", lifespan=lifespan)
 cors_origins = [origin.strip() for origin in os.getenv(
     "TAPA_NA_LATA_CORS_ORIGINS",
     "http://localhost:5173,http://127.0.0.1:5173",
@@ -214,7 +294,7 @@ def _edit_state_paths(project_id: str, edit_id: str) -> tuple[Path, Path]:
 
 def _atomic_write_state(state_path: Path, state: dict[str, Any]) -> None:
     temporary_path = state_path.with_suffix(".json.tmp")
-    temporary_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary_path.write_text(json.dumps(jsonable_encoder(state), ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(temporary_path, state_path)
 
 

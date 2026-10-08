@@ -1,9 +1,31 @@
+import json
+import logging
 import re
 import subprocess
 from typing import Dict, List, Optional
 
+LOGGER = logging.getLogger(__name__)
+
 _SILENCE_START_RE = re.compile(r"silence_start:\s*(-?\d+(?:\.\d+)?)")
 _SILENCE_END_RE = re.compile(r"silence_end:\s*(-?\d+(?:\.\d+)?)")
+
+
+def _has_audio_stream(video_path: str) -> Optional[bool]:
+    """True/False se o ffprobe conseguiu determinar; None se não foi possível sondar."""
+    command = [
+        "ffprobe",
+        "-v", "error",
+        "-select_streams", "a",
+        "-show_entries", "stream=index",
+        "-of", "json",
+        video_path,
+    ]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=True)
+        return bool(json.loads(result.stdout).get("streams"))
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError, AttributeError):
+        LOGGER.warning("Não foi possível sondar streams de áudio de %s com ffprobe", video_path)
+        return None
 
 
 def detect_silences(
@@ -26,6 +48,10 @@ def detect_silences(
         FileNotFoundError: If the ``ffmpeg`` executable is not available.
         RuntimeError: If FFmpeg exits with a non-zero status.
     """
+    if _has_audio_stream(video_path) is False:
+        LOGGER.warning("Vídeo sem faixa de áudio; deteção de silêncio ignorada: %s", video_path)
+        return []
+
     command = [
         "ffmpeg",
         "-hide_banner",

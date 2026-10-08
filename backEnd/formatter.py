@@ -1,9 +1,10 @@
 import argparse
 import json
 import logging
+import math
 import os
 import subprocess
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from face_tracker import detect_face_crop_x
 from json_to_ass import convert_json_to_ass
@@ -83,20 +84,37 @@ def build_center_crop_9x16_filter() -> str:
     return "crop=ih*9/16:ih:(iw-ow)/2:0"
 
 
+def _manual_crop_ints(
+    crop_x: Optional[int],
+    crop_y: Optional[int],
+    crop_w: Optional[int],
+    crop_h: Optional[int],
+) -> Optional[Tuple[int, int, int, int]]:
+    """Devolve (x, y, w, h) inteiros e seguros, ou None se algum valor for nulo/inválido."""
+    values = []
+    for value in (crop_x, crop_y, crop_w, crop_h):
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(number):
+            return None
+        values.append(int(number))
+    x, y, w, h = values
+    if w <= 0 or h <= 0:
+        return None
+    return max(0, x), max(0, y), w, h
+
+
 def has_manual_crop(
     crop_x: Optional[int],
     crop_y: Optional[int],
     crop_w: Optional[int],
     crop_h: Optional[int],
 ) -> bool:
-    return (
-        crop_x is not None
-        and crop_y is not None
-        and crop_w is not None
-        and crop_h is not None
-        and crop_w > 0
-        and crop_h > 0
-    )
+    return _manual_crop_ints(crop_x, crop_y, crop_w, crop_h) is not None
 
 
 def build_vertical_crop_filter(
@@ -106,9 +124,11 @@ def build_vertical_crop_filter(
     crop_h: Optional[int] = None,
     face_crop_x: Optional[int] = None,
 ) -> str:
-    if has_manual_crop(crop_x, crop_y, crop_w, crop_h):
+    manual_crop = _manual_crop_ints(crop_x, crop_y, crop_w, crop_h)
+    if manual_crop is not None:
+        x, y, w, h = manual_crop
         return (
-            f"crop={int(crop_w)}:{int(crop_h)}:{max(0, int(crop_x))}:{max(0, int(crop_y))},"
+            f"crop={w}:{h}:{x}:{y},"
             "scale=1080:1920:force_original_aspect_ratio=decrease,"
             "pad=1080:1920:(ow-iw)/2:(oh-ih)/2"
         )
@@ -244,6 +264,12 @@ def build_split_screen_filter(
     safe_area: float = 0.0,
 ) -> str:
     """Monta o -filter_complex 1080x1920: câmera no topo, conteúdo colado embaixo, título e legenda por cima."""
+    cam_crop = _manual_crop_ints(crop_x, crop_y, crop_w, crop_h)
+    content_crop = _manual_crop_ints(content_crop_x, content_crop_y, content_crop_w, content_crop_h)
+    if cam_crop is None or content_crop is None:
+        raise ValueError("Os cortes da câmera e do conteúdo devem ser válidos (não nulos e com largura/altura > 0).")
+    cam_x, cam_y, cam_w, cam_h = cam_crop
+    cont_x, cont_y, cont_w, cont_h = content_crop
     escaped_subtitle_path = escape_path_for_ffmpeg_filter(subtitle_path)
     subtitle_filter = f"ass='{escaped_subtitle_path}'"
     if os.path.isdir(FONTS_DIR):
@@ -268,10 +294,9 @@ def build_split_screen_filter(
         "[0:v]split=3[bg_orig][cam_orig][cont_orig];"
         "[bg_orig]scale=1080:1920:force_original_aspect_ratio=increase,"
         "crop=1080:1920,boxblur=20:20[bg];"
-        f"[cam_orig]crop={int(crop_w)}:{int(crop_h)}:{max(0, int(crop_x))}:{max(0, int(crop_y))},"
+        f"[cam_orig]crop={cam_w}:{cam_h}:{cam_x}:{cam_y},"
         "scale=1080:-1[cam_scaled];"
-        f"[cont_orig]crop={int(content_crop_w)}:{int(content_crop_h)}:"
-        f"{max(0, int(content_crop_x))}:{max(0, int(content_crop_y))},scale=1080:-1[cont_scaled];"
+        f"[cont_orig]crop={cont_w}:{cont_h}:{cont_x}:{cont_y},scale=1080:-1[cont_scaled];"
         "[bg][cont_scaled]overlay=0:1920-h[bg_with_cont];"
         "[bg_with_cont][cam_scaled]overlay=0:0[composed];"
         f"{title_node};"

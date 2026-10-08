@@ -1,4 +1,6 @@
 import json
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -326,6 +328,35 @@ def test_running_edit_owned_by_this_process_is_not_marked_failed(client: TestCli
         upload_api._mark_inactive(project_id, edit_id)
 
     assert response.json()["status"] == "running"
+
+
+def test_cleanup_removes_only_old_inactive_projects(client: TestClient) -> None:
+    root = upload_api.upload_root()
+    old = root / "old-project"
+    recent = root / "recent-project"
+    for directory in (old, recent):
+        (directory / "edits").mkdir(parents=True)
+        (directory / "edits" / "video.bin").write_bytes(b"x" * 100)
+    past = time.time() - 25 * 3600
+    for path in (old / "edits" / "video.bin", old / "edits", old):
+        os.utime(path, (past, past))
+
+    removed, freed = upload_api._cleanup_old_projects()
+
+    assert (removed, freed) == (1, 100)
+    assert not old.exists()
+    assert recent.exists()
+
+
+def test_write_edit_state_serializes_dataclasses(client: TestClient) -> None:
+    project_id = _upload_project(client)
+    edit_id = "8b3f3f6e-4d2f-4b43-b7d2-4c1f2b8a2c10"
+    metadata = VideoMetadata(path="v.mp4", duration_seconds=1.5, width=10, height=20, codec_name="h264", size_bytes=5)
+
+    upload_api._write_edit_state(project_id, edit_id, {"status": "completed", "result": {"metadata": metadata}})
+
+    stored = upload_api._read_edit_state(project_id, edit_id)
+    assert stored["result"]["metadata"]["codec_name"] == "h264"
 
 
 def test_download_is_blocked_before_edit_completion(client: TestClient) -> None:
