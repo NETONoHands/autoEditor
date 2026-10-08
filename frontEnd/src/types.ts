@@ -42,6 +42,10 @@ export type EditConfig = {
   content_crop_y?: number | null
   content_crop_w?: number | null
   content_crop_h?: number | null
+  subtitle_font: string
+  subtitle_color_preset: string
+  subtitle_position_y: 'top' | 'center' | 'bottom'
+  subtitle_scale: number
 }
 
 /** Uma palavra transcrita com seus tempos absolutos (segundos decimais). */

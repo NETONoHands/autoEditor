@@ -71,6 +71,10 @@ def run_pipeline(
     content_crop_y: Optional[int] = None,
     content_crop_w: Optional[int] = None,
     content_crop_h: Optional[int] = None,
+    subtitle_font: str = "Arial",
+    subtitle_color_preset: str = "white_black_outline",
+    subtitle_position_y: str = "bottom",
+    subtitle_scale: float = 1.0,
 ) -> Dict[str, Any]:
     configure_logging()
 
@@ -173,6 +177,10 @@ def run_pipeline(
                 content_crop_y=content_crop_y,
                 content_crop_w=content_crop_w,
                 content_crop_h=content_crop_h,
+                subtitle_font=subtitle_font,
+                subtitle_color_preset=subtitle_color_preset,
+                subtitle_position_y=subtitle_position_y,
+                subtitle_scale=subtitle_scale,
             )
             published_captions_paths.append(os.path.basename(formatting_result["captions_json"]))
             treated_paths.append(treated_video_path)

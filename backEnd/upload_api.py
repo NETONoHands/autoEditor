@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any, Literal, Optional
 
 from filelock import FileLock
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status
@@ -194,6 +194,12 @@ class EditRequest(BaseModel):
     content_crop_y: Optional[int] = None
     content_crop_w: Optional[int] = None
     content_crop_h: Optional[int] = None
+    subtitle_font: Literal["Arial", "Roboto", "Anton", "Sansation", "DejaVu Sans"] = "Arial"
+    subtitle_color_preset: Literal[
+        "white_black_outline", "yellow_shadow", "white_black_box", "cyan_black_outline"
+    ] = "white_black_outline"
+    subtitle_position_y: Literal["top", "center", "bottom"] = "bottom"
+    subtitle_scale: float = Field(default=1.0, ge=0.5, le=2.0)
 
 
 class RemovedInterval(BaseModel):
@@ -404,6 +410,10 @@ def _run_edit(project_id: str, edit_id: str, request: EditRequest) -> None:
             content_crop_y=request.content_crop_y,
             content_crop_w=request.content_crop_w,
             content_crop_h=request.content_crop_h,
+            subtitle_font=request.subtitle_font,
+            subtitle_color_preset=request.subtitle_color_preset,
+            subtitle_position_y=request.subtitle_position_y,
+            subtitle_scale=request.subtitle_scale,
         )
         files = [
             {"output_id": path.name, "filename": path.name, "size_bytes": path.stat().st_size}

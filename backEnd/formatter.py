@@ -363,6 +363,10 @@ def format_video_by_classification(
     content_crop_y: Optional[int] = None,
     content_crop_w: Optional[int] = None,
     content_crop_h: Optional[int] = None,
+    subtitle_font: str = "Arial",
+    subtitle_color_preset: str = "white_black_outline",
+    subtitle_position_y: str = "bottom",
+    subtitle_scale: float = 1.0,
 ) -> Dict[str, str]:
     configure_logging()
 
@@ -387,6 +391,10 @@ def format_video_by_classification(
         os.path.join(resolved_output_directory, f"{output_stem}.ass"),
         margin_h=subtitle_margin_h,
         margin_v=subtitle_margin_v,
+        font=subtitle_font,
+        color_preset=subtitle_color_preset,
+        position_y=subtitle_position_y,
+        scale=subtitle_scale,
     )
 
     # Crop manual completo dispensa o face_tracker.
