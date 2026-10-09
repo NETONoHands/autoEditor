@@ -34,7 +34,7 @@ from pipeline_contracts import (
     normalize_captions_payload,
     serialize_captions,
     serialize_video_metadata,
-    validate_captions_json,
+    validate_captions_srt,
     validate_video_file,
 )
 from segmentation import rebase_captions_to_intervals
@@ -267,7 +267,7 @@ async def _save_upload(upload: UploadFile, destination: Path, maximum_bytes: int
 def _validate_saved_files(video_path: Path, captions_path: Path) -> Any:
     try:
         metadata = validate_video_file(str(video_path))
-        validate_captions_json(str(captions_path))
+        validate_captions_srt(str(captions_path))
         return metadata
     except InputValidationError as exc:
         raise HTTPException(
@@ -454,7 +454,7 @@ def _run_edit(project_id: str, edit_id: str, request: EditRequest) -> None:
         )
         result = run_pipeline(
             str(input_directory / "video.mp4"),
-            str(input_directory / "captions.json"),
+            str(input_directory / "captions.srt"),
             project_root=str(project_directory),
             lut_path=request.lut_path or DEFAULT_LUT_PATH,
             output_directory=str(output_directory),
@@ -549,7 +549,7 @@ async def create_upload(
         )
 
     _extension_for(video, ".mp4")
-    _extension_for(captions, ".json")
+    _extension_for(captions, ".srt")
 
     upload_id = str(uuid.uuid4())
     project_id = str(uuid.uuid4())
@@ -558,12 +558,11 @@ async def create_upload(
     input_directory.mkdir(parents=True, exist_ok=False)
     ensure_project_structure(str(directory))
     video_path = input_directory / "video.mp4"
-    captions_path = input_directory / "captions.json"
+    captions_path = input_directory / "captions.srt"
 
     try:
         video_size = await _save_upload(video, video_path, max_video_bytes())
         captions_size = await _save_upload(captions, captions_path, max_captions_bytes())
-        _normalize_captions_file(captions_path)
         metadata_object = _validate_saved_files(video_path, captions_path)
     except InputValidationError as exc:
         shutil.rmtree(directory, ignore_errors=True)
@@ -591,7 +590,7 @@ async def create_upload(
         "project_id": project_id,
         "upload_id": upload_id,
         "title": normalized_title,
-        "input": {"video": "input/video.mp4", "captions": "input/captions.json"},
+        "input": {"video": "input/video.mp4", "captions": "input/captions.srt"},
         "metadata": metadata,
     }
     _write_manifest(project_id, manifest)

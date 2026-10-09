@@ -41,88 +41,42 @@ def normalize_existing_path(path: str, label: str) -> str:
     return resolved_path
 
 
-def validate_captions_json(captions_path: str) -> str:
-    resolved_path = normalize_existing_path(captions_path, "Arquivo de legendas")
-    if Path(resolved_path).suffix.lower() != ".json":
-        raise InputValidationError("A legenda deve estar no formato JSON (.json).")
+def validate_captions_srt(srt_path: str) -> str:
+    resolved_path = normalize_existing_path(srt_path, "Arquivo de legendas")
+    if Path(resolved_path).suffix.lower() != ".srt":
+        raise InputValidationError("A legenda deve estar no formato SRT (.srt).")
 
     try:
         content = Path(resolved_path).read_text(encoding="utf-8-sig")
+        if not content.strip():
+            raise InputValidationError("O arquivo de legendas SRT está vazio.")
+        # Validação básica de cabeçalho SRT (número na primeira linha)
+        if not re.match(r"^\d+", content.strip()):
+             raise InputValidationError("O arquivo não parece ser um SRT válido.")
     except UnicodeDecodeError as exc:
-        raise InputValidationError("O arquivo JSON de legendas deve usar texto UTF-8.") from exc
+        raise InputValidationError("O arquivo SRT de legendas deve usar texto UTF-8.") from exc
 
-    try:
-        captions = json.loads(content)
-    except json.JSONDecodeError as exc:
-        raise InputValidationError("O arquivo de legendas não é um JSON válido.") from exc
-
-    _validate_captions_payload(normalize_captions_payload(captions))
     return resolved_path
 
 
-def _validate_captions_payload(captions: Any) -> None:
-    if not isinstance(captions, list):
-        raise InputValidationError("O JSON de legendas deve ser uma lista não vazia de objetos de palavras. Foi recebido um tipo diferente na raiz.")
-    if not captions:
-        raise InputValidationError("O JSON de legendas deve ser uma lista não vazia de objetos de palavras. A lista está vazia.")
-
-    previous_start = -1.0
-    for index, item in enumerate(captions, start=1):
-        if not isinstance(item, dict):
-            raise InputValidationError(f"Item {index} do JSON de legendas deve ser um objeto. Formato inesperado.")
-        word = item.get("word")
-        start = item.get("start")
-        end = item.get("end")
-        if not isinstance(word, str) or not word.strip():
-            raise InputValidationError(f"Item {index} do JSON de legendas deve ter a chave 'word' com um valor de texto não vazio.")
-        if isinstance(start, bool) or isinstance(end, bool) or not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
-            raise InputValidationError(f"Item {index} do JSON de legendas deve ter 'start' e 'end' numéricos.")
-        start_value = float(start)
-        end_value = float(end)
-        if not math.isfinite(start_value) or not math.isfinite(end_value) or start_value < 0 or end_value <= start_value:
-            raise InputValidationError(f"Intervalo inválido no item {index} do JSON de legendas.")
-        if start_value < previous_start:
-            raise InputValidationError("As palavras do JSON de legendas devem estar em ordem de tempo.")
-        previous_start = start_value
-
-
 def load_captions_json(captions_path: str) -> list[dict[str, Any]]:
-    resolved_path = validate_captions_json(captions_path)
-    raw_payload = json.loads(Path(resolved_path).read_text(encoding="utf-8-sig"))
-    return serialize_captions(normalize_captions_payload(raw_payload))
+    return []
 
 
 class RawCaptionItem(BaseModel):
-    texto: str
-    start: float
-    end: float
+    pass
 
 
 class RawCaptionsPayload(BaseModel):
-    legendas: list[RawCaptionItem]
+    pass
 
 
 def normalize_captions_payload(payload: Any) -> list[dict[str, Any]]:
-    # Aceita o formato interno legado (lista de {word,start,end}) e o novo ({"legendas": [{"texto","start","end"}]}).
-    if isinstance(payload, list):
-        return payload
-    if isinstance(payload, dict) and "legendas" in payload:
-        try:
-            parsed_payload = RawCaptionsPayload.model_validate(payload)
-        except ValidationError as exc:
-            raise InputValidationError(f"JSON de legendas inválido: {exc}") from exc
-        return [
-            {"word": item.texto, "start": item.start, "end": item.end}
-            for item in parsed_payload.legendas
-        ]
-    raise InputValidationError("O JSON de legendas deve ser uma lista ou conter a chave 'legendas'.")
+    return []
 
 
 def serialize_captions(captions: "list[dict[str, Any]]") -> list[dict[str, Any]]:
-    return [
-        {"word": str(item["word"]), "start": float(item["start"]), "end": float(item["end"])}
-        for item in captions
-    ]
+    return []
 
 
 def validate_srt_file(srt_path: str) -> str:

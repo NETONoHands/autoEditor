@@ -103,8 +103,8 @@ def run_pipeline(
     log(f"A carregar vídeo: {os.path.basename(raw_video_path)}")
     resolved_video_path = validate_video_file(raw_video_path).path
     
-    log("A carregar e validar legendas JSON")
-    captions = load_captions_json(captions_path)
+    log("A validar legendas SRT")
+    validate_captions_srt(captions_path)
     
     log("A analisar ficheiro de vídeo para metadados")
     metadata = analyze_video(resolved_video_path)
@@ -191,7 +191,7 @@ def run_pipeline(
             log("Iniciando renderização FFmpeg")
             formatting_result = format_video_by_classification(
                 treated_video_path,
-                part_captions,
+                captions_path,
                 classification,
                 output_directory=resolved_output_directory,
                 output_stem=part_stem,

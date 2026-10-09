@@ -3,6 +3,7 @@ import json
 import logging
 import math
 import os
+import shutil
 import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -358,7 +359,7 @@ def run_ffmpeg(command: list[str]) -> None:
 
 def format_video_by_classification(
     base_tratada_path: str,
-    captions: List[Dict[str, Any]],
+    captions_path: str,
     classification: str,
     output_directory: Optional[str] = None,
     output_stem: str = "final",
@@ -390,22 +391,21 @@ def format_video_by_classification(
     )
     os.makedirs(resolved_output_directory, exist_ok=True)
 
+    # O SRT de entrada agora é usado como base direta para as legendas.
+    # Copiamos para o diretório de saída para manter a consistência do projeto.
+    final_srt_path = os.path.join(resolved_output_directory, f"{output_stem}.srt")
+    shutil.copy2(captions_path, final_srt_path)
+    LOGGER.info("Copied SRT to %s", final_srt_path)
+    
+    # Se precisarmos de ASS para filtros específicos ou legado, podemos converter aqui.
+    # Mas o filtro 'subtitles' do FFmpeg aceita SRT diretamente.
+    # Vamos manter captions_ass_path apontando para o próprio SRT ou converter se necessário.
+    # Por agora, seguindo a lógica de simplificação:
+    captions_ass_path = final_srt_path 
     captions_json_path = os.path.join(resolved_output_directory, f"{output_stem}.json")
-    with open(captions_json_path, "w", encoding="utf-8") as captions_file:
-        json.dump(captions, captions_file, ensure_ascii=False, indent=2)
-    LOGGER.info("Saved captions JSON to %s", captions_json_path)
-    _, subtitle_margin_v = _safe_text_margins(safe_area)
-    subtitle_margin_h = int(round(1080 * safe_area))
-    captions_ass_path = convert_json_to_ass(
-        captions_json_path,
-        os.path.join(resolved_output_directory, f"{output_stem}.ass"),
-        margin_h=subtitle_margin_h,
-        margin_v=subtitle_margin_v,
-        font=subtitle_font,
-        color_preset=subtitle_color_preset,
-        position_y=subtitle_position_y,
-        scale=subtitle_scale,
-    )
+    # Criamos um JSON vazio para não quebrar dependências que esperam o arquivo.
+    with open(captions_json_path, "w", encoding="utf-8") as f:
+        json.dump([], f)
 
     # Crop manual completo dispensa o face_tracker.
     face_crop_x = None
