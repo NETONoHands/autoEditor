@@ -9,8 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from pydantic import BaseModel, ValidationError
-
 MAX_PART_DURATION_SECONDS = 3600.0
 MIN_INPUT_WIDTH = 1280
 MIN_INPUT_HEIGHT = 720
@@ -48,81 +46,32 @@ def validate_captions_srt(srt_path: str) -> str:
 
     try:
         content = Path(resolved_path).read_text(encoding="utf-8-sig")
-        if not content.strip():
-            raise InputValidationError("O arquivo de legendas SRT está vazio.")
-        # Validação básica de cabeçalho SRT (número na primeira linha)
-        if not re.match(r"^\d+", content.strip()):
-             raise InputValidationError("O arquivo não parece ser um SRT válido.")
     except UnicodeDecodeError as exc:
         raise InputValidationError("O arquivo SRT de legendas deve usar texto UTF-8.") from exc
 
-    return resolved_path
+    if not content.strip():
+        raise InputValidationError("O arquivo de legendas SRT está vazio.")
 
-
-def load_captions_json(captions_path: str) -> list[dict[str, Any]]:
-    return []
-
-
-class RawCaptionItem(BaseModel):
-    pass
-
-
-class RawCaptionsPayload(BaseModel):
-    pass
-
-
-def normalize_captions_payload(payload: Any) -> list[dict[str, Any]]:
-    return []
-
-
-def serialize_captions(captions: "list[dict[str, Any]]") -> list[dict[str, Any]]:
-    return []
-
-
-def validate_srt_file(srt_path: str) -> str:
-    resolved_path = normalize_existing_path(srt_path, "Arquivo SRT")
-    if Path(resolved_path).suffix.lower() != ".srt":
-        raise InputValidationError("A legenda deve estar no formato SRT (.srt).")
-
-    try:
-        content = Path(resolved_path).read_text(encoding="utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise InputValidationError("O arquivo SRT deve usar texto UTF-8.") from exc
-
+    # Validação básica de estrutura SRT
     blocks = re.split(r"\r?\n\s*\r?\n", content.strip())
-    if not blocks or not content.strip():
-        raise InputValidationError("O arquivo SRT está vazio.")
-
     timestamp_pattern = re.compile(
         r"^\d{2}:\d{2}:\d{2},\d{3}\s+-->\s+\d{2}:\d{2}:\d{2},\d{3}$"
     )
-    previous_start = -1.0
+    
     for block_number, block in enumerate(blocks, start=1):
-        lines = [line.strip() for line in block.splitlines()]
-        if len(lines) < 3 or not lines[0].isdigit() or not timestamp_pattern.match(lines[1]):
-            raise InputValidationError(
-                f"Bloco {block_number} do SRT é inválido; esperados índice, timestamps e texto."
-            )
-        start_text, end_text = [part.strip() for part in lines[1].split("-->", 1)]
-        start = _srt_timestamp_to_seconds(start_text)
-        end = _srt_timestamp_to_seconds(end_text)
-        if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
-            raise InputValidationError(f"Intervalo inválido no bloco {block_number} do SRT.")
-        if start < previous_start:
-            raise InputValidationError("Os timestamps do SRT devem estar em ordem.")
-        previous_start = start
+        lines = [line.strip() for line in block.splitlines() if line.strip()]
+        if not lines:
+            continue
+        if len(lines) < 3:
+            raise InputValidationError(f"Bloco {block_number} do SRT é inválido; esperado índice, timestamps e texto.")
+        
+        if not lines[0].isdigit():
+            raise InputValidationError(f"Bloco {block_number} do SRT deve começar com um índice numérico.")
+        
+        if not timestamp_pattern.match(lines[1]):
+            raise InputValidationError(f"Timestamp inválido no bloco {block_number} do SRT.")
+
     return resolved_path
-
-
-def _srt_timestamp_to_seconds(value: str) -> float:
-    hours, minutes, seconds_milliseconds = value.split(":", 2)
-    seconds, milliseconds = seconds_milliseconds.split(",", 1)
-    hours_value = int(hours)
-    minutes_value = int(minutes)
-    seconds_value = int(seconds)
-    if minutes_value >= 60 or seconds_value >= 60 or len(milliseconds) != 3:
-        raise InputValidationError("Timestamp SRT fora do formato válido.")
-    return hours_value * 3600 + minutes_value * 60 + seconds_value + int(milliseconds) / 1000
 
 
 def _probe_video(video_path: str) -> dict[str, Any]:

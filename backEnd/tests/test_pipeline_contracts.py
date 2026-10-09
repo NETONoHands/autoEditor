@@ -5,76 +5,39 @@ import pytest
 import pipeline_contracts
 
 
-def test_validate_captions_json_accepts_well_formed_word_list(tmp_path: Path) -> None:
-    captions_path = tmp_path / "captions.json"
+def test_validate_captions_srt_accepts_well_formed_file(tmp_path: Path) -> None:
+    captions_path = tmp_path / "captions.srt"
     captions_path.write_text(
-        '[{"word": "Ola", "start": 0.0, "end": 0.523}, {"word": "mundo", "start": 0.6, "end": 1.234}]',
+        "1\n00:00:00,000 --> 00:00:00,523\nOla\n\n2\n00:00:00,600 --> 00:00:01,234\nmundo",
         encoding="utf-8",
     )
 
-    assert pipeline_contracts.validate_captions_json(str(captions_path)) == str(captions_path.resolve())
+    assert pipeline_contracts.validate_captions_srt(str(captions_path)) == str(captions_path.resolve())
 
 
-def test_validate_captions_json_rejects_non_json_extension(tmp_path: Path) -> None:
-    captions_path = tmp_path / "captions.srt"
+def test_validate_captions_srt_rejects_non_srt_extension(tmp_path: Path) -> None:
+    captions_path = tmp_path / "captions.txt"
     captions_path.write_text("1\n00:00:00,000 --> 00:00:01,000\nOla\n", encoding="utf-8")
 
-    with pytest.raises(pipeline_contracts.InputValidationError, match="JSON"):
-        pipeline_contracts.validate_captions_json(str(captions_path))
+    with pytest.raises(pipeline_contracts.InputValidationError, match="SRT"):
+        pipeline_contracts.validate_captions_srt(str(captions_path))
 
 
 @pytest.mark.parametrize(
     "payload",
     [
-        "[]",
-        '[{"word": "", "start": 0.0, "end": 1.0}]',
-        '[{"word": "Ola", "start": -1.0, "end": 1.0}]',
-        '[{"word": "Ola", "start": 1.0, "end": 1.0}]',
-        '[{"word": "Ola", "start": 2.0, "end": 3.0}, {"word": "mundo", "start": 1.0, "end": 1.5}]',
+        "",
+        "A\n00:00:00,000 --> 00:00:01,000\nOla",
+        "1\n00:00:00,000 -> 00:00:01,000\nOla",
+        "1\n00:00:00.000 --> 00:00:01.000\nOla",
     ],
 )
-def test_validate_captions_json_rejects_invalid_payloads(tmp_path: Path, payload: str) -> None:
-    captions_path = tmp_path / "captions.json"
+def test_validate_captions_srt_rejects_invalid_payloads(tmp_path: Path, payload: str) -> None:
+    captions_path = tmp_path / "captions.srt"
     captions_path.write_text(payload, encoding="utf-8")
 
     with pytest.raises(pipeline_contracts.InputValidationError):
-        pipeline_contracts.validate_captions_json(str(captions_path))
-
-
-def test_load_captions_json_preserves_decimal_precision(tmp_path: Path) -> None:
-    captions_path = tmp_path / "captions.json"
-    captions_path.write_text('[{"word": "Ola", "start": 0.123, "end": 0.456}]', encoding="utf-8")
-
-    captions = pipeline_contracts.load_captions_json(str(captions_path))
-
-    assert captions == [{"word": "Ola", "start": 0.123, "end": 0.456}]
-
-
-def test_normalize_captions_payload_maps_legendas_texto_to_word() -> None:
-    payload = {"legendas": [{"texto": "Ola", "start": 0.123, "end": 0.456}]}
-
-    assert pipeline_contracts.normalize_captions_payload(payload) == [
-        {"word": "Ola", "start": 0.123, "end": 0.456}
-    ]
-
-
-def test_normalize_captions_payload_rejects_unknown_shape() -> None:
-    with pytest.raises(pipeline_contracts.InputValidationError):
-        pipeline_contracts.normalize_captions_payload({"words": []})
-
-
-def test_validate_and_load_captions_json_accept_legendas_wrapper(tmp_path: Path) -> None:
-    captions_path = tmp_path / "captions.json"
-    captions_path.write_text(
-        '{"legendas": [{"texto": "Ola", "start": 0.0, "end": 0.5}, {"texto": "mundo", "start": 0.6, "end": 1.234}]}',
-        encoding="utf-8",
-    )
-
-    assert pipeline_contracts.validate_captions_json(str(captions_path)) == str(captions_path.resolve())
-    assert pipeline_contracts.load_captions_json(str(captions_path)) == [
-        {"word": "Ola", "start": 0.0, "end": 0.5},
-        {"word": "mundo", "start": 0.6, "end": 1.234},
-    ]
+        pipeline_contracts.validate_captions_srt(str(captions_path))
 
 
 def test_validate_vertical_output_accepts_expected_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -16,7 +16,7 @@ from formatter import format_video_by_classification
 from pipeline_contracts import (
     InputValidationError,
     build_output_stem,
-    load_captions_json,
+    validate_captions_srt,
     validate_dependencies,
     validate_output_video,
     validate_video_file,

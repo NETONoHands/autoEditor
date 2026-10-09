@@ -1,5 +1,4 @@
 import argparse
-import json
 import logging
 import math
 import os
@@ -8,9 +7,6 @@ import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 
 from face_tracker import detect_face_crop_x
-from json_to_ass import convert_json_to_ass
-from pipeline_contracts import normalize_captions_payload, serialize_captions
-from segmentation import SubtitleCue, _format_timestamp
 
 
 # Estilo de acessibilidade para legendas verticais (TikTok/Reels)
@@ -315,33 +311,6 @@ def build_split_screen_filter(
     )
 
 
-def build_srt_from_captions(
-    captions: List[Dict[str, Any]],
-    words_per_line: int = 4,
-    lines_per_cue: int = 2,
-) -> str:
-    # Legendas queimadas agrupam palavras em cues; os tempos originais do JSON não são arredondados.
-    max_words = words_per_line * lines_per_cue
-    chunks = [captions[index:index + max_words] for index in range(0, len(captions), max_words)]
-    cues = [
-        SubtitleCue(
-            "\n".join(
-                " ".join(str(word["word"]) for word in chunk[line:line + words_per_line])
-                for line in range(0, len(chunk), words_per_line)
-            ),
-            float(chunk[0]["start"]),
-            float(chunk[-1]["end"]),
-        )
-        for chunk in chunks
-        if chunk
-    ]
-    blocks = [
-        "\n".join([str(index), f"{_format_timestamp(cue.start)} --> {_format_timestamp(cue.end)}", cue.text])
-        for index, cue in enumerate(cues, start=1)
-    ]
-    return "\n\n".join(blocks) + ("\n" if blocks else "")
-
-
 def resolve_vertical_crop_x(video_path: str, face_tracking: bool) -> Optional[int]:
     if not face_tracking:
         return None
@@ -399,20 +368,15 @@ def format_video_by_classification(
     
     # Se precisarmos de ASS para filtros específicos ou legado, podemos converter aqui.
     # Mas o filtro 'subtitles' do FFmpeg aceita SRT diretamente.
-    # Vamos manter captions_ass_path apontando para o próprio SRT ou converter se necessário.
-    # Por agora, seguindo a lógica de simplificação:
-    captions_ass_path = final_srt_path 
-    captions_json_path = os.path.join(resolved_output_directory, f"{output_stem}.json")
-    # Criamos um JSON vazio para não quebrar dependências que esperam o arquivo.
-    with open(captions_json_path, "w", encoding="utf-8") as f:
-        json.dump([], f)
+    # Vamos manter captions_srt_path apontando para o próprio SRT.
+    captions_srt_path = final_srt_path 
 
     # Crop manual completo dispensa o face_tracker.
     face_crop_x = None
     if not has_manual_crop(crop_x, crop_y, crop_w, crop_h):
         face_crop_x = resolve_vertical_crop_x(resolved_video_path, face_tracking)
     vertical_filter = build_vertical_composite_filter(
-        captions_ass_path,
+        captions_srt_path,
         title=title,
         crop_x=crop_x,
         safe_area=safe_area,
@@ -429,7 +393,7 @@ def format_video_by_classification(
         split_screen_filter = build_split_screen_filter(
             crop_x, crop_y, crop_w, crop_h,
             content_crop_x, content_crop_y, content_crop_w, content_crop_h,
-            captions_ass_path,
+            captions_srt_path,
             title=title,
             safe_area=safe_area,
         )
@@ -439,8 +403,7 @@ def format_video_by_classification(
         normalized_classification,
         resolved_output_directory,
         output_stem,
-        captions_json_path,
-        captions_ass_path,
+        captions_srt_path,
         split_screen_filter,
     )
 
@@ -451,8 +414,7 @@ def _render_classified_outputs(
     normalized_classification: str,
     resolved_output_directory: str,
     output_stem: str,
-    captions_json_path: str,
-    captions_ass_path: str,
+    captions_srt_path: str,
     split_screen_filter: Optional[str] = None,
 ) -> Dict[str, str]:
     # Com os dois recortes definidos usa -filter_complex; senão mantém o -vf anterior.
@@ -530,8 +492,7 @@ def _render_classified_outputs(
             "classification": normalized_classification,
             "final_vertical_legendado": final_vertical_legendado,
             "final_horizontal_legendado": final_horizontal_legendado,
-            "captions_json": captions_json_path,
-            "captions_ass": captions_ass_path,
+            "captions_srt": captions_srt_path,
         }
 
     final_horizontal = os.path.join(resolved_output_directory, f"{output_stem}-horizontal.mp4")
@@ -586,8 +547,7 @@ def _render_classified_outputs(
         "classification": normalized_classification,
         "final_horizontal": final_horizontal,
         "final_vertical": final_vertical,
-        "captions_json": captions_json_path,
-        "captions_ass": captions_ass_path,
+        "captions_srt": captions_srt_path,
     }
 
 
@@ -596,7 +556,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         description="Format base_tratada.mp4 outputs based on short/long classification.",
     )
     parser.add_argument("video", help="Path to base_tratada.mp4")
-    parser.add_argument("captions", help="Path to the captions JSON file ([{word, start, end}, ...])")
+    parser.add_argument("captions", help="Path to the captions SRT file")
     parser.add_argument("classification", help="short or long")
     parser.add_argument(
         "--output-dir",
@@ -613,11 +573,9 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        with open(args.captions, encoding="utf-8-sig") as captions_file:
-            captions = serialize_captions(normalize_captions_payload(json.load(captions_file)))
         format_video_by_classification(
             args.video,
-            captions,
+            args.captions,
             args.classification,
             output_directory=args.output_dir,
             output_stem="final",

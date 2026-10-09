@@ -59,8 +59,8 @@ def apply_subtitles_with_ffmpeg(
     )
     os.makedirs(os.path.dirname(resolved_output_path), exist_ok=True)
 
-    if not resolved_subtitle_path.lower().endswith(".ass"):
-        LOGGER.warning("Atenção: O arquivo passado não é um .ass! (%s)", resolved_subtitle_path)
+    if not resolved_subtitle_path.lower().endswith((".ass", ".srt")):
+        LOGGER.warning("Atenção: O arquivo passado não é .ass nem .srt! (%s)", resolved_subtitle_path)
 
     # Estilo de acessibilidade para vídeos verticais (conforme regras de UI do TikTok/Reels)
     force_style = (

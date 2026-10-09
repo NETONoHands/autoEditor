@@ -30,9 +30,6 @@ from main import DEFAULT_LUT_PATH, run_pipeline
 from pipeline_contracts import (
     InputValidationError,
     build_output_stem,
-    load_captions_json,
-    normalize_captions_payload,
-    serialize_captions,
     serialize_video_metadata,
     validate_captions_srt,
     validate_video_file,

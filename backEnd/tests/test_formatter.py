@@ -142,18 +142,6 @@ def test_face_tracking_failure_uses_center_crop(monkeypatch) -> None:
     assert formatter.resolve_vertical_crop_x("video.mp4", True) is None
 
 
-def test_build_srt_from_captions_preserves_millisecond_precision() -> None:
-    captions = [
-        {"word": "Ola", "start": 0.0, "end": 0.5},
-        {"word": "mundo", "start": 0.523, "end": 1.234},
-    ]
-
-    result = formatter.build_srt_from_captions(captions)
-
-    assert "00:00:00,000 --> 00:00:01,234" in result
-    assert "Ola mundo" in result
-
-
 def test_formatter_renders_vertical_outputs_from_generated_ass(monkeypatch, tmp_path: Path) -> None:
     video_path = tmp_path / "treated.mp4"
     video_path.write_bytes(b"video")
@@ -172,7 +160,7 @@ def test_formatter_renders_vertical_outputs_from_generated_ass(monkeypatch, tmp_
         safe_area=0.1,
     )
 
-    final_srt_path = Path(result["captions_ass"])
+    final_srt_path = Path(result["captions_srt"])
     assert final_srt_path.is_file()
     assert final_srt_path.suffix == ".srt"
     srt_content = final_srt_path.read_text(encoding="utf-8")

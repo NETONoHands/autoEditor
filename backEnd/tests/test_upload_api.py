@@ -22,7 +22,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     return TestClient(upload_api.app)
 
 
-CAPTIONS_JSON = b'[{"word": "Ola", "start": 0.0, "end": 1.0}]'
+CAPTIONS_SRT = b"1\n00:00:00,000 --> 00:00:01,000\nOla"
 
 
 def _upload_project(client: TestClient) -> str:
@@ -31,7 +31,7 @@ def _upload_project(client: TestClient) -> str:
         data={"title": "Minha live"},
         files={
             "video": ("entrada.mp4", b"1234567890", "video/mp4"),
-            "captions": ("legenda.json", CAPTIONS_JSON, "application/json"),
+            "captions": ("legenda.srt", CAPTIONS_SRT, "text/plain"),
         },
     )
     assert response.status_code == 201
