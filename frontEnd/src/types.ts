@@ -22,6 +22,8 @@ export type Edit = {
   status: EditStatus
   progress_percent: number
   stage: string
+  current_phase?: string
+  logs?: string[]
   error?: string
   outputs?: Output[]
 }

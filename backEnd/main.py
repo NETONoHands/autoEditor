@@ -2,7 +2,7 @@ import argparse
 import logging
 import os
 import tempfile
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from analyzer import analyze_video
 from cutter import (
@@ -75,9 +75,22 @@ def run_pipeline(
     subtitle_color_preset: str = "white_black_outline",
     subtitle_position_y: str = "bottom",
     subtitle_scale: float = 1.0,
+    on_phase: Optional[Callable[[str], None]] = None,
+    on_log: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
-    configure_logging()
+    def phase(name: str) -> None:
+        if on_phase:
+            on_phase(name)
 
+    def log(message: str) -> None:
+        if on_log:
+            on_log(message)
+
+    configure_logging()
+    phase("A extrair áudio e metadados")
+    log("A validar dependências do sistema (FFmpeg, etc.)")
+    validate_dependencies()
+    
     resolved_project_root = os.path.abspath(project_root or os.getcwd())
     resolved_output_directory = os.path.abspath(
         output_directory or os.path.join(resolved_project_root, "Output")
@@ -87,16 +100,21 @@ def run_pipeline(
     if not output_name.strip():
         raise InputValidationError("Informe o nome da edição.")
 
-    validate_dependencies()
+    log(f"A carregar vídeo: {os.path.basename(raw_video_path)}")
     resolved_video_path = validate_video_file(raw_video_path).path
+    
+    log("A carregar e validar legendas JSON")
     captions = load_captions_json(captions_path)
+    
+    log("A analisar ficheiro de vídeo para metadados")
     metadata = analyze_video(resolved_video_path)
     classification = metadata.classification
     output_stem = build_output_stem(output_name)
     resolved_lut_path = lut_path
     if not os.path.isabs(resolved_lut_path):
         resolved_lut_path = os.path.join(resolved_project_root, resolved_lut_path)
-    LOGGER.info("Step 1/3 completed: analyzer (%s)", classification)
+    
+    log(f"Metadados extraídos: {metadata.duration_seconds:.1f}s, resolução {metadata.width}x{metadata.height}")
 
     windows = split_at_speech_boundaries(
         metadata.duration_seconds,
@@ -105,6 +123,7 @@ def run_pipeline(
     is_split = len(windows) > 1
     if is_split:
         LOGGER.info("Vídeo longo será dividido em %s partes antes da edição", len(windows))
+        log(f"Vídeo dividido em {len(windows)} partes")
 
     with tempfile.TemporaryDirectory(prefix="tapa-na-lata-", dir=resolved_output_directory) as work_directory:
         if is_split:
@@ -123,11 +142,14 @@ def run_pipeline(
         published_captions_paths: list[str] = []
         vertical_output_metadata: list[dict[str, object]] = []
         for index, source_path in enumerate(source_paths, start=1):
+            if is_split:
+                log(f"A processar parte {index} de {len(source_paths)}")
             part_stem = build_output_stem(output_name, index) if is_split else output_stem
             part_captions = rebase_captions_to_window(captions, windows[index - 1]) if is_split else captions
 
             edit_source_path = source_path
             if remove_silence:
+                phase("A analisar silêncios e disfluências")
                 part_duration = windows[index - 1].duration if is_split else metadata.duration_seconds
                 intervals = compute_keep_intervals(
                     compute_auto_remove_intervals(
@@ -138,12 +160,15 @@ def run_pipeline(
                     ),
                     part_duration,
                 )
+                removed_seconds = max(0.0, part_duration - sum(end - start for start, end in intervals))
+                log(f"{removed_seconds:.1f} segundos de silêncio/disfluências detetados (parte {index}/{len(source_paths)})")
                 part_captions = rebase_captions_to_intervals(part_captions, intervals)
                 preserved_intervals.extend(
                     {"start": start, "end": end, "duration": end - start}
                     for start, end in intervals
                 )
                 cut_path = os.path.join(work_directory, f"{part_stem}-silencio-removido.mp4")
+                log("A cortar segmentos de silêncio com FFmpeg")
                 edit_source_path = cut_video_with_ffmpeg(
                     source_path,
                     intervals,
@@ -152,6 +177,8 @@ def run_pipeline(
                 )
                 cut_video_metadata.append(validate_output_video(edit_source_path))
 
+            phase("A aplicar parâmetros de câmara")
+            log("A aplicar LUT e tratamento de cor")
             base_treated_path = os.path.join(resolved_output_directory, f"{part_stem}-tratado.mp4")
             if os.path.exists(base_treated_path):
                 raise InputValidationError(f"A saída já existe e não será sobrescrita: {base_treated_path}")
@@ -160,6 +187,8 @@ def run_pipeline(
                 output_path=base_treated_path,
                     lut_path=resolved_lut_path,
             )
+            phase("A renderizar vídeo final")
+            log("Iniciando renderização FFmpeg")
             formatting_result = format_video_by_classification(
                 treated_video_path,
                 part_captions,
@@ -185,6 +214,7 @@ def run_pipeline(
             published_captions_paths.append(os.path.basename(formatting_result["captions_json"]))
             treated_paths.append(treated_video_path)
             formatted_outputs.append(formatting_result)
+            log(f"Renderização concluída (parte {index}/{len(source_paths)})")
 
             for output_path in formatting_result.values():
                 if isinstance(output_path, str) and output_path.lower().endswith(".mp4"):

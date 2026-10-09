@@ -62,7 +62,14 @@ def apply_subtitles_with_ffmpeg(
     if not resolved_subtitle_path.lower().endswith(".ass"):
         LOGGER.warning("Atenção: O arquivo passado não é um .ass! (%s)", resolved_subtitle_path)
 
-    ass_filter = f"ass='{escape_path_for_ffmpeg_filter(resolved_subtitle_path)}'"
+    # Estilo de acessibilidade para vídeos verticais (conforme regras de UI do TikTok/Reels)
+    force_style = (
+        "Fontname=Arial,Fontsize=90,Bold=-1,"
+        "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H80000000,"
+        "BorderStyle=1,Outline=4,Shadow=2,Alignment=2,MarginV=450"
+    )
+    escaped_path = escape_path_for_ffmpeg_filter(resolved_subtitle_path)
+    ass_filter = f"subtitles='{escaped_path}':force_style='{force_style}'"
     base_command = [
         "ffmpeg",
         "-y",

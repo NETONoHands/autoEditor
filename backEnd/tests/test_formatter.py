@@ -14,8 +14,9 @@ def test_vertical_filter_uses_central_crop_and_reserved_title_subtitle_areas() -
     assert "x=(w-text_w)/2:y=80" in result
     assert "enable='between(t,0,5)'" in result
     assert "alpha='if(lt(t,4),1,5-t)'" in result
-    assert "ass=filename='C\\:/legenda.ass'" in result
-    assert result.index("drawtext") < result.index("ass=")
+    assert "subtitles='C\\:/legenda.ass':force_style=" in result
+    assert "MarginV=450" in result
+    assert result.index("drawtext") < result.index("subtitles=")
 
 
 def test_vertical_filter_uses_bundled_title_and_subtitle_fonts() -> None:
@@ -105,7 +106,7 @@ def test_vertical_filter_adds_safe_area_margin() -> None:
     assert "scale=864:1536" not in result
     assert "pad=1080:1920:(ow-iw)/2:(oh-ih)/2" in result
     assert "y=192" in result
-    assert "ass=filename='C\\:/legenda.ass'" in result
+    assert "subtitles='C\\:/legenda.ass':force_style=" in result
 
 
 def test_vertical_filter_rejects_invalid_safe_area() -> None:
@@ -176,5 +177,6 @@ def test_formatter_renders_vertical_outputs_from_generated_ass(monkeypatch, tmp_
     assert ",108,108,192,1" in ass_content
     assert len(commands) == 2
     video_filter = commands[0][commands[0].index("-vf") + 1]
-    assert "ass=filename='" in video_filter
+    assert "subtitles='" in video_filter
+    assert "force_style=" in video_filter
     assert formatter.escape_path_for_ffmpeg_filter(str(ass_path)) in video_filter

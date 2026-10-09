@@ -5,6 +5,8 @@ import CaptionsEditor from './CaptionsEditor'
 import CropSelector from './CropSelector'
 import { API_URL, getEditProgress, projectVideoUrl, readCaptionsFile, requestCut, startEdit, uploadProject } from './api'
 import type { Caption, Edit, EditingPace, FileState, Metadata, Orientation, Phase, SafeArea, RemoveInterval } from './types'
+import ProcessingTerminal from './ProcessingTerminal'
+
 
 const bytes = (value: number) => value < 1048576 ? `${(value / 1024).toFixed(1)} KB` : `${(value / 1048576).toFixed(1)} MB`
 const duration = (value: number) => `${Math.floor(value / 60)} min ${Math.round(value % 60).toString().padStart(2, '0')} s`
@@ -33,6 +35,8 @@ function App() {
   const [videoSrc, setVideoSrc] = useState('')
   const [captions, setCaptions] = useState<Caption[]>([])
   const [, setRemoveIntervals] = useState<RemoveInterval[]>([])
+  const [showLogs, setShowLogs] = useState(false)
+
   const [edit, setEdit] = useState<Edit | null>(null)
   const [error, setError] = useState('')
 
@@ -105,7 +109,78 @@ function App() {
     {phase === 'input' && <form className="workspace" onSubmit={start}><section className="intro"><p className="eyebrow">01 / entrada</p><h2>Deixe o vídeo pronto<br /><em>para bater forte.</em></h2><p className="intro-copy">Envie a gravação e a legenda. A gente cuida do corte, do som e do enquadramento.</p></section><section className="form-panel"><FileDrop label="Vídeo da live" hint="MP4 · até 2 GB" state={fileState.video} file={video} accept=".mp4" onChange={(event) => chooseFile('video', event.target.files?.[0])} /><FileDrop label="Legenda" hint="JSON · palavra a palavra" state={fileState.captions} file={captionsFile} accept=".json" onChange={(event) => chooseFile('captions', event.target.files?.[0])} /><label className="field-label">Nome da edição<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Ex.: Como funciona o Quadstick" /></label><label className="field-label">Título no vídeo <small>(opcional)</small><input value={displayTitle} onChange={(event) => setDisplayTitle(event.target.value)} placeholder="Deixe vazio para não exibir" /></label><div className="orientation-row"><span className="field-label">Formato de saída</span><div className="segmented">{(['vertical', 'horizontal'] as Orientation[]).map((item) => <button type="button" className={orientation === item ? 'selected' : ''} key={item} onClick={() => setOrientation(item)}>{item === 'vertical' ? '9:16 vertical' : '16:9 horizontal'}</button>)}</div></div><div className="orientation-row"><span className="field-label">Ritmo de edição</span><div className="segmented">{([{ value: 'natural', label: 'Natural' }, { value: 'fast', label: 'Rápido' }, { value: 'jump-cut', label: 'Jump cut' }] as const).map((item) => <button type="button" className={editingPace === item.value ? 'selected' : ''} key={item.value} onClick={() => setEditingPace(item.value)}>{item.label}</button>)}</div></div>{orientation === 'vertical' && <div className="orientation-row"><span className="field-label">Área segura</span><div className="segmented">{([{ value: 0, label: 'Sem margem' }, { value: 0.1, label: '10%' }, { value: 0.15, label: '15%' }] as const).map((item) => <button type="button" className={safeArea === item.value ? 'selected' : ''} key={item.value} onClick={() => setSafeArea(item.value)}>{item.label}</button>)}</div></div>}<section className="subtitle-settings"><span className="field-label">Estilo de Legendas</span><label className="field-label">Fonte<select value={subtitleFont} onChange={(event) => setSubtitleFont(event.target.value)}>{['Arial', 'Roboto', 'Anton', 'Sansation', 'DejaVu Sans'].map((font) => <option key={font} value={font}>{font}</option>)}</select></label><label className="field-label">Cores<select value={subtitleColor} onChange={(event) => setSubtitleColor(event.target.value)}>{([{ value: 'white_black_outline', label: 'Branco com contorno preto' }, { value: 'yellow_shadow', label: 'Amarelo com sombra' }, { value: 'white_black_box', label: 'Branco com caixa preta' }, { value: 'cyan_black_outline', label: 'Ciano com contorno preto' }] as const).map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><div className="orientation-row"><span className="field-label">Posição vertical</span><div className="segmented">{([{ value: 'top', label: 'Topo' }, { value: 'center', label: 'Centro' }, { value: 'bottom', label: 'Fundo' }] as const).map((item) => <button type="button" className={subtitlePosition === item.value ? 'selected' : ''} key={item.value} onClick={() => setSubtitlePosition(item.value)}>{item.label}</button>)}</div></div><label className="field-label">Tamanho da fonte ({subtitleScale.toFixed(1)}×)<input type="range" min="0.5" max="2" step="0.1" value={subtitleScale} onChange={(event) => setSubtitleScale(Number(event.target.value))} /></label></section>{metadata && <div className="metadata-grid"><Metric label="duração" value={duration(metadata.duration_seconds)} /><Metric label="resolução" value={metadata.resolution_label} /><Metric label="formato" value={metadata.codec.toUpperCase()} /><Metric label="tamanho" value={bytes(metadata.size_bytes)} /></div>}{error && <p className="error-message">{error}</p>}<button className="primary-button" disabled={!valid || fileState.video === 'loading' || fileState.captions === 'loading'}>Iniciar edição <span>↗</span></button></section></form>}
     {phase === 'crop-select' && metadata && <section className="crop-select-view"><p className="eyebrow">02 / enquadramento</p><h2>Defina os enquadramentos.</h2><CropSelector projectId={projectId} metadata={metadata} onCropComplete={completeCrop} /></section>}
     {phase === 'editing' && <CaptionsEditor projectId={projectId} videoSrc={videoSrc} captions={captions} onCaptionsChange={setCaptions} onVideoSrcChange={setVideoSrc} onRemoveIntervalsChange={setRemoveIntervals} onContinue={finishEditing} />}
-      {phase !== 'input' && phase !== 'crop-select' && phase !== 'editing' && <section className="progress-view"><p className="eyebrow">03 / processamento</p><h2>{edit?.status === 'failed' ? 'Algo saiu do eixo.' : edit?.status === 'completed' ? 'Está na lata.' : 'Ajustando cada detalhe.'}</h2>{metadata && <div className="metadata-grid progress-metadata"><Metric label="duração" value={duration(metadata.duration_seconds)} /><Metric label="resolução" value={metadata.resolution_label} /><Metric label="formato" value={metadata.codec.toUpperCase()} /><Metric label="tamanho" value={bytes(metadata.size_bytes)} /></div>}<div className="progress-card"><div className="progress-head"><span>{stage}</span><strong>{edit?.progress_percent || 0}%</strong></div><div className="progress-track"><div style={{ width: `${edit?.progress_percent || 0}%` }} /></div><p className="stage-copy">{edit?.status === 'failed' ? edit.error : 'Aplicando tratamento, enquadramento e acabamento à sua edição.'}</p></div>{phase === 'done' && <div className="results"><p className="eyebrow">arquivos finais</p>{edit?.outputs?.filter((item) => /\.json$/i.test(item.filename) || (item.filename.toLowerCase().includes(orientation) && item.filename.endsWith('.mp4'))).map((item) => <a className="result-link" href={`${API_URL}/api/projects/${projectId}/edits/${edit.edit_id}/outputs/${item.output_id}/download`} key={item.output_id}><span>{item.filename.endsWith('.json') ? 'JSON' : orientation === 'vertical' ? '9:16' : '16:9'}</span>{item.filename}<b>↓</b></a>)}</div>}<button className="secondary-button" type="button" onClick={reset}>+ Novo processamento</button></section>}
+      {phase !== 'input' && phase !== 'crop-select' && phase !== 'editing' && (
+        <section className="progress-view">
+          <p className="eyebrow">03 / processamento</p>
+          
+          <h2>
+            {edit?.status === 'failed' 
+              ? 'Algo saiu do eixo.' 
+              : edit?.status === 'completed' 
+                ? 'Está na lata.' 
+                : (edit?.current_phase || 'Ajustando cada detalhe.')}
+          </h2>
+
+          {metadata && (
+            <div className="metadata-grid progress-metadata">
+              <Metric label="duração" value={duration(metadata.duration_seconds)} />
+              <Metric label="resolução" value={metadata.resolution_label} />
+              <Metric label="formato" value={metadata.codec.toUpperCase()} />
+              <Metric label="tamanho" value={bytes(metadata.size_bytes)} />
+            </div>
+          )}
+
+          <div className="progress-card">
+            <div className="progress-head">
+              <span>{edit?.stage || 'processando'}</span>
+              <strong>{edit?.progress_percent || 0}%</strong>
+            </div>
+            <div className="progress-track">
+              <div 
+                className={['queued', 'running'].includes(edit?.status || '') ? 'progress-track-shimmer' : ''}
+                style={{ width: `${edit?.progress_percent || 0}%` }} 
+              />
+            </div>
+            <p className="stage-copy">
+              {edit?.status === 'failed' 
+                ? edit.error 
+                : 'Aplicando tratamento, enquadramento e acabamento à sua edição.'}
+            </p>
+          </div>
+
+          {(['queued', 'running', 'completed', 'failed'].includes(edit?.status || '')) && (
+            <ProcessingTerminal 
+              logs={edit?.logs || []} 
+              isExpanded={showLogs} 
+              onToggle={() => setShowLogs(!showLogs)} 
+            />
+          )}
+
+          {phase === 'done' && (
+            <div className="results">
+              <p className="eyebrow">arquivos finais</p>
+              {edit?.outputs?.filter((item) => 
+                /\.json$/i.test(item.filename) || 
+                (item.filename.toLowerCase().includes(orientation) && item.filename.endsWith('.mp4'))
+              ).map((item) => (
+                <a 
+                  className="result-link" 
+                  href={`${API_URL}/api/projects/${projectId}/edits/${edit.edit_id}/outputs/${item.output_id}/download`} 
+                  key={item.output_id}
+                >
+                  <span>{item.filename.endsWith('.json') ? 'JSON' : orientation === 'vertical' ? '9:16' : '16:9'}</span>
+                  {item.filename}
+                  <b>↓</b>
+                </a>
+              ))}
+            </div>
+          )}
+          
+          <button className="secondary-button" type="button" onClick={reset}>
+            + Novo processamento
+          </button>
+        </section>
+      )}
   </main>
 }
 

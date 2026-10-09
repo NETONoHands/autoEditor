@@ -362,9 +362,11 @@ def _read_edit_state(project_id: str, edit_id: str) -> dict[str, Any] | None:
                     "status": "failed",
                     "progress_percent": 100,
                     "stage": "failed",
+                    "current_phase": "Interrompido",
                     "error": "A edição foi interrompida (o servidor foi reiniciado ou parou). Inicie-a novamente.",
                 }
             )
+            state.setdefault("logs", []).append("Erro: A edição foi interrompida inesperadamente.")
             _atomic_write_state(state_path, state)
         return state
 
@@ -377,6 +379,56 @@ def _write_edit_state(project_id: str, edit_id: str, state: dict[str, Any]) -> N
         _atomic_write_state(state_path, state)
 
 
+def _update_edit_state(project_id: str, edit_id: str, updates: dict[str, Any], log: str | None = None) -> dict[str, Any]:
+    # Lê-modifica-grava sob lock para não perder logs escritos por outras chamadas.
+    state_path, lock_path = _edit_state_paths(project_id, edit_id)
+    with FileLock(str(lock_path)):
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state.update(updates)
+        if log is not None:
+            state.setdefault("logs", []).append(log)
+        state["heartbeat_at"] = time.time()
+        _atomic_write_state(state_path, state)
+    return state
+
+
+def _append_log(edit_id: str, message: str, project_id: str | None = None) -> None:
+    if project_id is None:
+        project_id = _project_id_for_edit(edit_id)
+    if project_id is None:
+        return
+    try:
+        _update_edit_state(project_id, edit_id, {}, log=message)
+    except Exception:
+        LOGGER.debug("Falha ao gravar log da edição %s", edit_id, exc_info=True)
+
+
+def _project_id_for_edit(edit_id: str) -> str | None:
+    with _ACTIVE_EDITS_LOCK:
+        for active_project_id, active_edit_id in _ACTIVE_EDITS:
+            if active_edit_id == edit_id:
+                return active_project_id
+    return None
+
+
+def _set_phase(project_id: str, edit_id: str, phase: str, progress_percent: int | None = None) -> None:
+    updates: dict[str, Any] = {"current_phase": phase}
+    if progress_percent is not None:
+        updates["progress_percent"] = progress_percent
+    try:
+        _update_edit_state(project_id, edit_id, updates, log=phase)
+    except Exception:
+        LOGGER.debug("Falha ao gravar fase da edição %s", edit_id, exc_info=True)
+
+
+PHASE_PROGRESS = {
+    "A extrair áudio e metadados": 10,
+    "A analisar silêncios e disfluências": 30,
+    "A aplicar parâmetros de câmara": 50,
+    "A renderizar vídeo final": 75,
+}
+
+
 def _run_edit(project_id: str, edit_id: str, request: EditRequest) -> None:
     project_directory = upload_root() / project_id
     input_directory = project_directory / "input"
@@ -387,9 +439,19 @@ def _run_edit(project_id: str, edit_id: str, request: EditRequest) -> None:
         "edit_id": edit_id,
         "outputs": [],
     }
+    state.setdefault("current_phase", "")
+    state.setdefault("logs", [])
+
+    def on_phase(phase: str) -> None:
+        _set_phase(project_id, edit_id, phase, PHASE_PROGRESS.get(phase))
+
+    def on_log(message: str) -> None:
+        _append_log(edit_id, message, project_id)
+
     try:
-        state.update({"status": "running", "progress_percent": 10, "stage": "processing"})
-        _write_edit_state(project_id, edit_id, state)
+        state = _update_edit_state(
+            project_id, edit_id, {"status": "running", "progress_percent": 10, "stage": "processing"}, log="Edição iniciada"
+        )
         result = run_pipeline(
             str(input_directory / "video.mp4"),
             str(input_directory / "captions.json"),
@@ -414,28 +476,43 @@ def _run_edit(project_id: str, edit_id: str, request: EditRequest) -> None:
             subtitle_color_preset=request.subtitle_color_preset,
             subtitle_position_y=request.subtitle_position_y,
             subtitle_scale=request.subtitle_scale,
+            on_phase=on_phase,
+            on_log=on_log,
         )
         files = [
             {"output_id": path.name, "filename": path.name, "size_bytes": path.stat().st_size}
             for path in output_directory.rglob("*")
             if path.is_file()
         ]
-        state.update(
+        _update_edit_state(
+            project_id,
+            edit_id,
             {
                 "status": "completed",
                 "progress_percent": 100,
                 "stage": "completed",
+                "current_phase": "Concluído",
                 "outputs": files,
                 "silence_removal": result.get("silence_removal", {}),
                 "result": result,
-            }
+            },
+            log="Edição concluída",
         )
-        _write_edit_state(project_id, edit_id, state)
     except Exception as exc:
         LOGGER.exception("Edição %s falhou", edit_id)
-        state.update({"status": "failed", "progress_percent": 100, "stage": "failed", "error": str(exc)})
         try:
-            _write_edit_state(project_id, edit_id, state)
+            _update_edit_state(
+                project_id,
+                edit_id,
+                {
+                    "status": "failed",
+                    "progress_percent": 100,
+                    "stage": "failed",
+                    "current_phase": "Falhou",
+                    "error": str(exc),
+                },
+                log=f"Erro: {exc}",
+            )
         except Exception:
             LOGGER.exception("Não foi possível guardar o estado falhado da edição %s", edit_id)
     finally:
@@ -443,11 +520,14 @@ def _run_edit(project_id: str, edit_id: str, request: EditRequest) -> None:
 
 
 def _public_edit_state(state: dict[str, Any]) -> dict[str, Any]:
-    return {
+    public = {
         key: value
         for key, value in state.items()
         if key not in {"result", "heartbeat_at"}
     }
+    public.setdefault("current_phase", "")
+    public.setdefault("logs", [])
+    return public
 
 
 @app.get("/health")
@@ -706,6 +786,8 @@ def start_edit(project_id: str, request: EditRequest) -> dict[str, Any]:
         "status": "queued",
         "progress_percent": 0,
         "stage": "queued",
+        "current_phase": "Na fila",
+        "logs": [],
         "outputs": [],
     }
     (upload_root() / project_id / "edits" / edit_id / "output").mkdir(parents=True, exist_ok=True)

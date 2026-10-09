@@ -12,6 +12,15 @@ from pipeline_contracts import normalize_captions_payload, serialize_captions
 from segmentation import SubtitleCue, _format_timestamp
 
 
+# Estilo de acessibilidade para legendas verticais (TikTok/Reels)
+# Garante legibilidade e posicionamento fora da UI nativa.
+VERTICAL_SUBTITLE_FORCE_STYLE = (
+    "Fontname=Arial,Fontsize=90,Bold=-1,"
+    "PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BackColour=&H80000000,"
+    "BorderStyle=1,Outline=4,Shadow=2,Alignment=2,MarginV=450"
+)
+
+
 def _run_ffmpeg_with_fallback(command: list[str]) -> None:
     try:
         completed = subprocess.run(command, check=True, capture_output=True, text=True)
@@ -227,7 +236,8 @@ def build_vertical_composite_filter(
                 f"borderw=3:bordercolor=black:x=(w-text_w)/2:y={title_y}:"
                 "enable='between(t,0,5)':alpha='if(lt(t,4),1,5-t)'"
             )
-    subtitle_filter = f"ass=filename='{escape_path_for_ffmpeg_filter(subtitle_path)}'"
+    escaped_subtitle_path = escape_path_for_ffmpeg_filter(subtitle_path)
+    subtitle_filter = f"subtitles='{escaped_subtitle_path}':force_style='{VERTICAL_SUBTITLE_FORCE_STYLE}'"
     subtitle_fonts_dir = FONTS_DIR if os.path.isdir(FONTS_DIR) else None
     if subtitle_fonts_dir:
         subtitle_filter += f":fontsdir='{escape_path_for_ffmpeg_filter(subtitle_fonts_dir)}'"
@@ -271,7 +281,7 @@ def build_split_screen_filter(
     cam_x, cam_y, cam_w, cam_h = cam_crop
     cont_x, cont_y, cont_w, cont_h = content_crop
     escaped_subtitle_path = escape_path_for_ffmpeg_filter(subtitle_path)
-    subtitle_filter = f"ass='{escaped_subtitle_path}'"
+    subtitle_filter = f"subtitles='{escaped_subtitle_path}':force_style='{VERTICAL_SUBTITLE_FORCE_STYLE}'"
     if os.path.isdir(FONTS_DIR):
         subtitle_filter += f":fontsdir='{escape_path_for_ffmpeg_filter(FONTS_DIR)}'"
     title_node = "[composed]null[with_title]"
